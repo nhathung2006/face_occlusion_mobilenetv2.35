@@ -1,0 +1,68 @@
+model:
+  name: mobilenetv2
+  width_mult: 0.35
+  num_classes: 2
+  dropout: 0.30
+  pretrained: true
+  pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
+  freeze_backbone_epochs: 0
+
+data:
+  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/dataset"
+  image_size: 112
+  batch_size: 64
+  num_workers: 2
+  pin_memory: true
+  class_names:
+    - clear
+    - occluded
+
+training:
+  epochs: 100
+  seed: 42
+  optimizer: sgd
+  momentum: 0.90
+  nesterov: true
+  weight_decay: 0.0001
+
+  two_stage:
+    enabled: true
+    stage1_epochs: 8              # Giai đoạn 1: Epoch 1 -> 8 (chỉ train Classifier)
+    stage1_lr: 0.005              # LR Giai đoạn 1 (1e-3)
+    unfreeze_from_block: 11       # Giai đoạn 2: Khóa block 0 -> 10, mở từ block 11 trở đi
+    warmup_epochs: 3              # Warmup đầu Giai đoạn 2
+    warmup_start_factor: 0.1      # Bắt đầu từ 10% LR mục tiêu
+    stage2_backbone_lr: 0.0005    # LR nhóm Block 11+ & Conv 1x1 (1e-4)
+    stage2_classifier_lr: 0.005   # LR nhóm Classifier (1e-3, lớn gấp 10 lần)
+
+  scheduler: cosine
+  cosine:
+    eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6)
+
+  label_smoothing: 0.0
+  early_stopping:
+    enabled: true
+    patience: 20
+    monitor: val_f1
+    mode: max
+
+augmentation:
+  horizontal_flip: 0.50
+  rotation_degrees: 10
+  brightness: 0.20
+  contrast: 0.20
+  saturation: 0.20
+  hue: 0.05
+  gaussian_noise_std: 0.00
+
+checkpoint:
+  best_path: checkpoints/best.pth
+  last_path: checkpoints/last.pth
+
+export:
+  onnx_path: outputs/onnx/mobilenetv2_035_face_occlusion.onnx
+  opset: 17
+  dynamic_batch: true
+
+inference:
+  confidence_threshold: 0.50
