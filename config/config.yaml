@@ -23,7 +23,7 @@ training:
   optimizer: sgd
   momentum: 0.90
   nesterov: true
-  weight_decay: 0.0001
+  weight_decay: 0.0005
 
   two_stage:
     enabled: true
@@ -32,8 +32,8 @@ training:
     unfreeze_from_block: 11       # Giai đoạn 2: Khóa block 0 -> 10, mở từ block 11 trở đi
     warmup_epochs: 3              # Warmup đầu Giai đoạn 2
     warmup_start_factor: 0.1      # Bắt đầu từ 10% LR mục tiêu
-    stage2_backbone_lr: 0.0005    # LR nhóm Block 11+ & Conv 1x1 (1e-4)
-    stage2_classifier_lr: 0.005   # LR nhóm Classifier (1e-3, lớn gấp 10 lần)
+    stage2_backbone_lr: 0.0002    # LR nhóm Block 11+ & Conv 1x1
+    stage2_classifier_lr: 0.002   # LR nhóm Classifier
 
   scheduler: cosine
   cosine:
