@@ -23,7 +23,7 @@ training:
   optimizer: sgd
   momentum: 0.90
   nesterov: true
-  weight_decay: 0.0005
+  weight_decay: 0.0002
 
   two_stage:
     enabled: true
