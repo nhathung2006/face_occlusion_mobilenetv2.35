@@ -68,7 +68,14 @@ def build_datasets(cfg: dict):
     train_ds = datasets.ImageFolder(train_dir, transform=train_tf)
     val_ds = datasets.ImageFolder(val_dir, transform=eval_tf)
 
-    if test_dir.exists() and any(test_dir.iterdir()):
+    # An unlabeled test directory may contain image files directly without
+    # class subdirectories. ImageFolder cannot load that layout, so use the
+    # labeled validation split as the fallback loader. The flat test folder
+    # remains available through test.py --unlabeled-dir.
+    has_test_class_dirs = test_dir.exists() and any(
+        path.is_dir() for path in test_dir.iterdir()
+    )
+    if has_test_class_dirs:
         test_ds = datasets.ImageFolder(test_dir, transform=eval_tf)
     else:
         test_ds = datasets.ImageFolder(val_dir, transform=eval_tf)

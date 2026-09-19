@@ -1,0 +1,15 @@
+index,source_path,true_id,true_class,pred_id,pred_class
+17,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\22--Picnic_22_Picnic_Picnic_22_771.jpg_b88948.jpg,0,clear,1,occluded
+18,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\25--Soldier_Patrol_25_Soldier_Patrol_Soldier_Patrol_25_443.jpg_b90954.jpg,0,clear,1,occluded
+22,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\28--Sports_Fan_28_Sports_Fan_Sports_Fan_28_61.jpg_b93796.jpg,0,clear,1,occluded
+50,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\49--Greeting_49_Greeting_peoplegreeting_49_218.jpg_b33370.jpg,0,clear,1,occluded
+52,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\52--Photographers_52_Photographers_photographertakingphoto_52_315.jpg_b34535.jpg,0,clear,1,occluded
+71,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\clear\KhanhDD_20260414_161210_523.jpg,0,clear,1,occluded
+74,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\10--People_Marching_10_People_Marching_People_Marching_2_1021.jpg_b19301.jpg,1,occluded,0,clear
+79,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\13--Interview_13_Interview_Interview_Sequences_13_723.jpg_b37011.jpg,1,occluded,0,clear
+85,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\2--Demonstration_2_Demonstration_Political_Rally_2_803.jpg_b72114.jpg,1,occluded,0,clear
+90,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\26--Soldier_Drilling_26_Soldier_Drilling_Soldiers_Drilling_26_420.jpg_b92463.jpg,1,occluded,0,clear
+111,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\54--Rescue_54_Rescue_rescuepeople_54_675.jpg_b137962.jpg,1,occluded,0,clear
+113,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\58--Hockey_58_Hockey_icehockey_puck_58_343.jpg_b143728.jpg,1,occluded,0,clear
+115,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\6--Funeral_6_Funeral_Funeral_6_873.jpg_b144929.jpg,1,occluded,0,clear
+116,C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\dataset\val\occluded\GiangNDM_20260414_161919_479.jpg,1,occluded,0,clear

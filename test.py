@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import shutil
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -51,6 +50,39 @@ def save_unlabeled_contact_sheets(results, output_dir: Path, sheet_size: int = 2
         fig.tight_layout()
         fig.savefig(output_dir / f"contact_sheet_{sheet_index:03d}.png", dpi=150)
         plt.close(fig)
+
+
+def save_misclassified_group(
+    items: list[dict], output_dir: Path, true_class: str, pred_class: str, filename: str
+) -> None:
+    """Save one contact sheet and a copy of one specific error direction."""
+    group = [
+        item
+        for item in items
+        if item["true_class"] == true_class and item["pred_class"] == pred_class
+    ]
+    if not group:
+        return
+
+    columns = 4
+    rows = math.ceil(len(group) / columns)
+    fig, axes = plt.subplots(rows, columns, figsize=(4 * columns, 4 * rows))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+
+    for ax, item in zip(axes, group):
+        image = Image.open(item["path"]).convert("RGB")
+        ax.imshow(image)
+        ax.set_title(
+            f"True: {item['true_class']}\nPred: {item['pred_class']}", fontsize=9
+        )
+        ax.axis("off")
+
+    for ax in axes[len(group):]:
+        ax.axis("off")
+    fig.suptitle(f"True: {true_class} | Predicted: {pred_class}", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(output_dir / filename, dpi=150)
+    plt.close(fig)
 
 
 def run_unlabeled_inference(cfg: dict, checkpoint_path: Path, input_dir: Path, output_dir: Path) -> None:
@@ -145,6 +177,12 @@ def main():
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--misclassified-dir", default="outputs/misclassified")
     parser.add_argument(
+        "--split",
+        choices=["val", "test"],
+        default="test",
+        help="Labeled split to evaluate; use val when test is an unlabeled flat folder",
+    )
+    parser.add_argument(
         "--unlabeled-dir",
         default=None,
         help="Run inference on a flat directory of images without ground-truth labels",
@@ -166,7 +204,8 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    _, _, test_loader, class_names = build_loaders(cfg)
+    _, val_loader, test_loader, class_names = build_loaders(cfg)
+    eval_loader = val_loader if args.split == "val" else test_loader
     model = build_model(cfg).to(device)
     load_checkpoint(model, checkpoint_path, device)
     model.eval()
@@ -175,7 +214,7 @@ def main():
     misclassified = []
     sample_offset = 0
     with torch.no_grad():
-        for images, targets in test_loader:
+        for images, targets in eval_loader:
             images = images.to(device)
             logits = model(images)
             preds = logits.argmax(dim=1).cpu().tolist()
@@ -183,7 +222,7 @@ def main():
 
             for batch_index, (target, pred) in enumerate(zip(targets_list, preds)):
                 if target != pred:
-                    image_path, folder_target = test_loader.dataset.samples[sample_offset + batch_index]
+                    image_path, folder_target = eval_loader.dataset.samples[sample_offset + batch_index]
                     misclassified.append(
                         {
                             "index": sample_offset + batch_index,
@@ -202,11 +241,12 @@ def main():
 
     print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
 
-    Path("outputs/confusion_matrix").mkdir(parents=True, exist_ok=True)
+    confusion_dir = Path("outputs/confusion_matrix")
+    confusion_dir.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(5, 5))
     ConfusionMatrixDisplay.from_predictions(y_true, y_pred, display_labels=class_names, ax=ax, cmap="Blues")
     fig.tight_layout()
-    fig.savefig("outputs/confusion_matrix/test_confusion_matrix.png", dpi=150)
+    fig.savefig(confusion_dir / f"{args.split}_confusion_matrix.png", dpi=150)
     plt.close(fig)
 
     misclassified_dir = Path(args.misclassified_dir)
@@ -218,12 +258,6 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for item in misclassified:
-            copied_name = (
-                f"{item['index']:04d}_true-{item['true_class']}"
-                f"_pred-{item['pred_class']}_{Path(item['path']).name}"
-            )
-            destination = misclassified_dir / copied_name
-            shutil.copy2(item["path"], destination)
             writer.writerow(
                 {
                     "index": item["index"],
@@ -234,7 +268,6 @@ def main():
                     "pred_class": item["pred_class"],
                 }
             )
-            item["copied_path"] = str(destination)
 
     if misclassified:
         columns = 4
@@ -255,6 +288,22 @@ def main():
         fig.savefig(misclassified_dir / "contact_sheet.png", dpi=150)
         plt.close(fig)
 
+        save_misclassified_group(
+            misclassified,
+            misclassified_dir,
+            true_class="clear",
+            pred_class="occluded",
+            filename="clear_true_occluded_pred.png",
+        )
+        save_misclassified_group(
+            misclassified,
+            misclassified_dir,
+            true_class="occluded",
+            pred_class="clear",
+            filename="occluded_true_clear_pred.png",
+        )
+
+    print(f"Split: {args.split}")
     print(f"Misclassified: {len(misclassified)} / {len(y_true)}")
     print(f"Misclassified CSV: {csv_path}")
     if misclassified:
