@@ -64,5 +64,10 @@ export:
   opset: 17
   dynamic_batch: true
 
+evaluation:
+  enabled: true
+  split: val
+  misclassified_dir: outputs/misclassified_val
+
 inference:
   confidence_threshold: 0.50

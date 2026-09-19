@@ -251,6 +251,14 @@ def main():
 
     misclassified_dir = Path(args.misclassified_dir)
     misclassified_dir.mkdir(parents=True, exist_ok=True)
+    for stale_name in [
+        "contact_sheet.png",
+        "clear_true_occluded_pred.png",
+        "occluded_true_clear_pred.png",
+    ]:
+        stale_path = misclassified_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     csv_path = misclassified_dir / "misclassified.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:

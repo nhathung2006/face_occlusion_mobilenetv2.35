@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import subprocess
+import sys
 
 import torch
 import torch.nn as nn
@@ -206,6 +208,37 @@ def main():
 
     save_history(history, Path("outputs/history.csv"))
     plot_history(history, Path("outputs/plots"))
+
+    evaluation_cfg = cfg.get("evaluation", {})
+    if bool(evaluation_cfg.get("enabled", True)) and best_epoch_info is not None:
+        project_root = Path(__file__).resolve().parent
+        eval_split = str(evaluation_cfg.get("split", "val"))
+        eval_output = Path(
+            evaluation_cfg.get("misclassified_dir", "outputs/misclassified_val")
+        )
+        if not eval_output.is_absolute():
+            eval_output = project_root / eval_output
+
+        eval_command = [
+            sys.executable,
+            str(project_root / "test.py"),
+            "--config",
+            str(Path(args.config).resolve()),
+            "--checkpoint",
+            str(best_path.resolve()),
+            "--split",
+            eval_split,
+            "--misclassified-dir",
+            str(eval_output.resolve()),
+        ]
+        print("\nRunning automatic validation evaluation...")
+        try:
+            subprocess.run(eval_command, cwd=project_root, check=True)
+        except subprocess.CalledProcessError as exc:
+            print(
+                "Warning: training completed, but automatic misclassification "
+                f"evaluation failed with exit code {exc.returncode}."
+            )
 
     print("\n" + "=" * 65)
     print("                     TRAINING SUMMARY (BEST F1)")

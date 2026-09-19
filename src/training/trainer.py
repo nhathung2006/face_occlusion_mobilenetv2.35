@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
+import time
 
 import matplotlib.pyplot as plt
 import torch
@@ -65,6 +67,45 @@ def plot_history(history, out_dir: Path) -> None:
         ("accuracy", "Accuracy", ["train_accuracy", "val_accuracy"]),
         ("f1", "Macro F1", ["train_f1", "val_f1"]),
     ]
+
+    def save_plot_safely(fig, output_path: Path) -> None:
+        """Save plots without failing training when Windows locks an old PNG."""
+        output_path = Path(output_path)
+        temp_path = output_path.with_name(
+            f".{output_path.stem}.{os.getpid()}.tmp{output_path.suffix}"
+        )
+        try:
+            fig.savefig(temp_path, dpi=150)
+            for attempt in range(5):
+                try:
+                    os.replace(temp_path, output_path)
+                    return
+                except OSError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.5 * (attempt + 1))
+        except OSError as exc:
+            fallback_path = output_path.with_name(
+                f"{output_path.stem}_latest_{os.getpid()}{output_path.suffix}"
+            )
+            try:
+                fig.savefig(fallback_path, dpi=150)
+                print(
+                    f"Warning: could not replace {output_path}; "
+                    f"saved plot to {fallback_path} ({exc})"
+                )
+            except OSError as fallback_exc:
+                print(
+                    f"Warning: could not save plot {output_path}; "
+                    f"continuing without plot ({fallback_exc})"
+                )
+        finally:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+
     for name, ylabel, fields in plots:
         plt.figure(figsize=(7, 5))
         plt.plot(epochs, [h[fields[0]] for h in history], label="train")
@@ -73,5 +114,6 @@ def plot_history(history, out_dir: Path) -> None:
         plt.ylabel(ylabel)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(out_dir / f"{name}.png", dpi=150)
+        figure = plt.gcf()
+        save_plot_safely(figure, out_dir / f"{name}.png")
         plt.close()
