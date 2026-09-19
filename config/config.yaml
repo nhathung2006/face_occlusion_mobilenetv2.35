@@ -42,7 +42,7 @@ training:
   label_smoothing: 0.0
   early_stopping:
     enabled: true
-    patience: 20
+    patience: 12
     monitor: val_f1
     mode: max
 
