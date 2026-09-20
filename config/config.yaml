@@ -18,7 +18,7 @@ data:
     - occluded
 
 training:
-  epochs: 100
+  epochs: 200
   seed: 42
   optimizer: sgd
   momentum: 0.90
@@ -32,8 +32,8 @@ training:
     unfreeze_from_block: 11       # Giai đoạn 2: Khóa block 0 -> 10, mở từ block 11 trở đi
     warmup_epochs: 3              # Warmup đầu Giai đoạn 2
     warmup_start_factor: 0.1      # Bắt đầu từ 10% LR mục tiêu
-    stage2_backbone_lr: 0.0003    # LR nhóm Block 11+ & Conv 1x1
-    stage2_classifier_lr: 0.003   # LR nhóm Classifier
+    stage2_backbone_lr: 0.0002    # LR nhóm Block 11+ & Conv 1x1
+    stage2_classifier_lr: 0.002   # LR nhóm Classifier
 
   scheduler: cosine
   cosine:

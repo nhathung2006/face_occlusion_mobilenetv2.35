@@ -193,8 +193,14 @@ def main():
             best_metric = current
             best_epoch_info = row
             patience_counter = 0
-            save_checkpoint(best_path, model, optimizer, epoch, best_metric, history, cfg)
-            print(f"  >>> Saved new best checkpoint at Epoch {epoch:03d} ({monitor}: {current:.4f}) to {best_path}")
+            saved_best_path = save_checkpoint(
+                best_path, model, optimizer, epoch, best_metric, history, cfg
+            )
+            best_path = Path(saved_best_path)
+            print(
+                f"  >>> Saved new best checkpoint at Epoch {epoch:03d} "
+                f"({monitor}: {current:.4f}) to {best_path}"
+            )
         else:
             patience_counter += 1
 

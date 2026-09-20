@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
+import time
+from pathlib import Path
 from typing import Any, Tuple
 
 import torch
@@ -199,14 +202,53 @@ def build_scheduler(
 
 
 def save_checkpoint(path, model, optimizer, epoch, best_metric, history, cfg):
-    torch.save(
-        {
-            "epoch": epoch,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "best_metric": best_metric,
-            "history": history,
-            "config": cfg,
-        },
-        path,
-    )
+    """Save a checkpoint safely on Windows.
+
+    Writing directly to an existing checkpoint can fail with Windows error
+    1224 when another process briefly has the destination file mapped/locked.
+    Save to a sibling temporary file first, then atomically replace the
+    destination with a retry window. If Windows keeps the destination locked,
+    retain the successfully written checkpoint under a fallback name instead
+    of aborting the training process.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {
+        "epoch": epoch,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "best_metric": best_metric,
+        "history": history,
+        "config": cfg,
+    }
+
+    try:
+        torch.save(payload, temp_path)
+        for attempt in range(15):
+            try:
+                os.replace(temp_path, path)
+                return path
+            except OSError as exc:
+                # Windows may report ERROR_ACCESS_DENIED (5),
+                # ERROR_LOCK_VIOLATION (33), or ERROR_USER_MAPPED_FILE (1224)
+                # while antivirus, indexing, or a reader holds the file.
+                if getattr(exc, "winerror", None) not in (5, 32, 33, 1224):
+                    raise
+                if attempt == 14:
+                    fallback_path = path.with_name(
+                        f"{path.stem}_fallback_{os.getpid()}_{time.time_ns()}{path.suffix}"
+                    )
+                    os.replace(temp_path, fallback_path)
+                    print(
+                        f"Warning: could not replace locked checkpoint {path}; "
+                        f"saved the latest checkpoint to {fallback_path}"
+                    )
+                    return fallback_path
+                time.sleep(min(1.0, 0.25 * (attempt + 1)))
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
