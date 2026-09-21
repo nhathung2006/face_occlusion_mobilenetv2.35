@@ -1,0 +1,18 @@
+timestamp,filename,old_class,new_class,model_pred,confidence,action
+2026-09-21 15:59:07,41--Swimming_41_Swimming_Swimmer_41_279.jpg_b121853.jpg,clear,DELETED,occluded,0.9549,delete
+2026-09-21 15:59:24,12--Group_12_Group_Group_12_Group_Group_12_277.jpg_b34649.jpg,occluded,clear,clear,0.9116,relabel
+2026-09-21 15:59:31,MaiNT_20260414_160543_931.jpg,clear,DELETED,occluded,0.8978,delete
+2026-09-21 15:59:45,11--Meeting_11_Meeting_Meeting_11_Meeting_Meeting_11_443.jpg_b23216.jpg,occluded,clear,clear,0.8544,relabel
+2026-09-21 15:59:53,2--Demonstration_2_Demonstration_Protesters_2_884.jpg_b12068.jpg,clear,DELETED,occluded,0.8236,delete
+2026-09-21 15:59:59,57--Angler_57_Angler_peoplefishing_57_91.jpg_b141276.jpg,clear,DELETED,occluded,0.8084,delete
+2026-09-21 16:00:02,6--Funeral_6_Funeral_Funeral_6_719.jpg_b145477.jpg,occluded,clear,clear,0.7789,relabel
+2026-09-21 16:00:05,39--Ice_Skating_39_Ice_Skating_Ice_Skating_39_109.jpg_b118117.jpg,occluded,clear,clear,0.7638,relabel
+2026-09-21 16:00:08,2--Demonstration_2_Demonstration_Demonstrators_2_537.jpg_b50029.jpg,clear,DELETED,occluded,0.7504,delete
+2026-09-21 16:00:17,DoanNV_20260414_151426_507.jpg,occluded,clear,clear,0.7442,relabel
+2026-09-21 16:01:13,0--Parade_0_Parade_Parade_0_676.jpg_b2340.jpg,occluded,clear,clear,0.7367,relabel
+2026-09-21 16:02:10,0--Parade_0_Parade_Parade_0_461.jpg_b2859.jpg,occluded,clear,clear,0.6404,relabel
+2026-09-21 16:02:29,01a0b343-89d8-7fa2-b722-ae1f65bd77fb_nvr-llWGaUl9M9E771xokkJUiNr5fMyJBigI_1789713943134_img_face5.jpg,occluded,clear,clear,0.5440,relabel
+2026-09-21 16:02:36,2--Demonstration_2_Demonstration_Political_Rally_2_816.jpg_b20003.jpg,occluded,clear,clear,0.5356,relabel
+2026-09-21 16:03:14,8--Election_Campain_8_Election_Campain_Election_Campaign_8_534.jpg_b154235.jpg,occluded,clear,occluded,0.5516,relabel
+2026-09-21 16:03:30,41--Swimming_41_Swimming_Swimming_41_101.jpg_b121809.jpg,clear,DELETED,clear,0.5464,delete
+2026-09-21 16:03:32,13--Interview_13_Interview_Interview_2_People_Visible_13_394.jpg_b37385.jpg,occluded,clear,occluded,0.5220,relabel
