@@ -4,16 +4,30 @@ import argparse
 import csv
 import math
 from pathlib import Path
+import sys
+import time
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import matplotlib.pyplot as plt
 import torch
+from torch.utils.data import DataLoader
+from torchvision import datasets
 from PIL import Image
-from sklearn.metrics import ConfusionMatrixDisplay, classification_report
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score
 
 from src.datasets.dataset import build_loaders, build_transforms
 from src.utils.config import load_config
 from src.utils.model import build_model
-
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -25,162 +39,182 @@ def load_checkpoint(model, checkpoint_path: Path, device):
     return model
 
 
-def save_unlabeled_contact_sheets(results, output_dir: Path, sheet_size: int = 25) -> None:
-    for sheet_index, start in enumerate(range(0, len(results), sheet_size), start=1):
-        sheet = results[start:start + sheet_size]
+def save_contact_sheets_paged(items: list[dict], output_dir: Path, prefix: str = "misclassified", sheet_size: int = 25, max_sheets: int = 5) -> None:
+    sheets_to_generate = min(max_sheets, math.ceil(len(items) / sheet_size))
+    for sheet_idx in range(sheets_to_generate):
+        start = sheet_idx * sheet_size
+        chunk = items[start:start + sheet_size]
         columns = 5
-        rows = math.ceil(len(sheet) / columns)
+        rows = math.ceil(len(chunk) / columns)
         fig, axes = plt.subplots(rows, columns, figsize=(15, 3.6 * rows))
         axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
 
-        for ax, item in zip(axes, sheet):
-            image = Image.open(item["source_path"]).convert("RGB")
-            ax.imshow(image)
-            low_confidence = " | LOW CONF" if item["below_threshold"] else ""
-            ax.set_title(
-                f"{item['filename']}\n{item['pred_class']} "
-                f"({item['confidence']:.3f}){low_confidence}",
-                fontsize=8,
-            )
+        for ax, item in zip(axes, chunk):
+            try:
+                img = Image.open(item["path"]).convert("RGB")
+                ax.imshow(img)
+                conf = item.get("confidence", 0.0) * 100
+                ax.set_title(
+                    f"{Path(item['path']).name}\nTrue: {item['true_class']} | Pred: {item['pred_class']} ({conf:.1f}%)",
+                    fontsize=8,
+                    color="#d63031" if item["true_class"] != item["pred_class"] else "#00b894",
+                )
+            except Exception:
+                pass
             ax.axis("off")
 
-        for ax in axes[len(sheet):]:
+        for ax in axes[len(chunk):]:
             ax.axis("off")
 
         fig.tight_layout()
-        fig.savefig(output_dir / f"contact_sheet_{sheet_index:03d}.png", dpi=150)
+        sheet_name = f"{prefix}_sheet_{sheet_idx + 1:03d}.png"
+        fig.savefig(output_dir / sheet_name, dpi=120)
         plt.close(fig)
 
 
-def save_misclassified_group(
-    items: list[dict], output_dir: Path, true_class: str, pred_class: str, filename: str
-) -> None:
-    """Save one contact sheet and a copy of one specific error direction."""
-    group = [
-        item
-        for item in items
-        if item["true_class"] == true_class and item["pred_class"] == pred_class
-    ]
-    if not group:
-        return
-
-    columns = 4
-    rows = math.ceil(len(group) / columns)
-    fig, axes = plt.subplots(rows, columns, figsize=(4 * columns, 4 * rows))
-    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
-
-    for ax, item in zip(axes, group):
-        image = Image.open(item["path"]).convert("RGB")
-        ax.imshow(image)
-        ax.set_title(
-            f"True: {item['true_class']}\nPred: {item['pred_class']}", fontsize=9
-        )
-        ax.axis("off")
-
-    for ax in axes[len(group):]:
-        ax.axis("off")
-    fig.suptitle(f"True: {true_class} | Predicted: {pred_class}", fontsize=13)
-    fig.tight_layout()
-    fig.savefig(output_dir / filename, dpi=150)
-    plt.close(fig)
-
-
-def run_unlabeled_inference(cfg: dict, checkpoint_path: Path, input_dir: Path, output_dir: Path) -> None:
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Unlabeled input directory not found: {input_dir}")
-
-    image_paths = sorted(
-        path for path in input_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
-    if not image_paths:
-        raise FileNotFoundError(f"No supported images found in: {input_dir}")
+def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, output_dir: Path, batch_size: int = 64) -> None:
+    if not dataset_dir.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    print(f"Evaluating dataset from: {dataset_dir.resolve()}")
+    print(f"Loading checkpoint: {checkpoint_path.resolve()}")
+
     class_names = list(cfg["data"]["class_names"])
-    image_size = int(cfg["data"]["image_size"])
-    batch_size = int(cfg["data"].get("batch_size", 32))
-    confidence_threshold = float(cfg.get("inference", {}).get("confidence_threshold", 0.5))
     _, eval_transform = build_transforms(cfg)
+
+    # Use ImageFolder for labeled dataset
+    test_ds = datasets.ImageFolder(dataset_dir, transform=eval_transform)
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True if torch.cuda.is_available() else False,
+    )
 
     model = build_model(cfg).to(device)
     load_checkpoint(model, checkpoint_path, device)
     model.eval()
 
-    results = []
+    y_true, y_pred = [], []
+    misclassified = []
+    sample_offset = 0
+
+    start_time = time.time()
     with torch.inference_mode():
-        for start in range(0, len(image_paths), batch_size):
-            batch_paths = image_paths[start:start + batch_size]
-            batch_images = []
-            valid_paths = []
+        for batch_idx, (images, targets) in enumerate(test_loader):
+            images = images.to(device, non_blocking=True)
+            logits = model(images)
+            probs = torch.softmax(logits, dim=1).cpu()
+            confidences, preds = probs.max(dim=1)
 
-            for image_path in batch_paths:
-                try:
-                    with Image.open(image_path) as image:
-                        batch_images.append(eval_transform(image.convert("RGB")))
-                    valid_paths.append(image_path)
-                except (OSError, ValueError) as exc:
-                    print(f"Skipped unreadable image: {image_path} ({exc})")
+            preds_list = preds.tolist()
+            targets_list = targets.tolist()
 
-            if not batch_images:
-                continue
+            for i, (target, pred, conf) in enumerate(zip(targets_list, preds_list, confidences)):
+                global_idx = sample_offset + i
+                image_path, _ = test_ds.samples[global_idx]
+                true_cls = class_names[target]
+                pred_cls = class_names[pred]
 
-            logits = model(torch.stack(batch_images).to(device))
-            probabilities = torch.softmax(logits, dim=1).cpu()
-            confidences, predictions = probabilities.max(dim=1)
+                if target != pred:
+                    misclassified.append({
+                        "index": global_idx,
+                        "path": str(image_path),
+                        "filename": Path(image_path).name,
+                        "true_id": target,
+                        "true_class": true_cls,
+                        "pred_id": pred,
+                        "pred_class": pred_cls,
+                        "confidence": float(conf),
+                    })
 
-            for image_path, prediction, confidence in zip(valid_paths, predictions, confidences):
-                confidence_value = float(confidence)
-                results.append(
-                    {
-                        "filename": image_path.name,
-                        "source_path": str(image_path),
-                        "pred_id": int(prediction),
-                        "pred_class": class_names[int(prediction)],
-                        "confidence": confidence_value,
-                        "below_threshold": confidence_value < confidence_threshold,
-                    }
-                )
+            y_pred.extend(preds_list)
+            y_true.extend(targets_list)
+            sample_offset += len(targets_list)
+
+            if (batch_idx + 1) % 20 == 0 or (sample_offset == len(test_ds)):
+                print(f"Processed [{sample_offset}/{len(test_ds)}] images...", end="\r", flush=True)
+
+    elapsed = time.time() - start_time
+    print(f"\nCompleted in {elapsed:.2f}s ({len(test_ds)/elapsed:.1f} images/sec)")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / "predictions.csv"
+
+    # Calculate metrics
+    acc = accuracy_score(y_true, y_pred)
+    macro_f1 = f1_score(y_true, y_pred, average="macro")
+
+    print("\n" + "=" * 65)
+    print("                    EVALUATION REPORT")
+    print("=" * 65)
+    print(f"Total Samples:       {len(y_true)}")
+    print(f"Overall Accuracy:    {acc * 100:.2f}%")
+    print(f"Macro F1-Score:      {macro_f1 * 100:.2f}%")
+    print(f"Misclassified Total: {len(misclassified)} / {len(y_true)} ({len(misclassified)/len(y_true)*100:.2f}%)")
+    print("-" * 65)
+    print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
+    print("=" * 65)
+
+    # Save Confusion Matrix
+    cm_path = output_dir / "confusion_matrix.png"
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ConfusionMatrixDisplay.from_predictions(y_true, y_pred, display_labels=class_names, ax=ax, cmap="Blues", values_format="d")
+    ax.set_title(f"Confusion Matrix (Acc: {acc*100:.2f}%)", fontsize=12, pad=10)
+    fig.tight_layout()
+    fig.savefig(cm_path, dpi=150)
+    plt.close(fig)
+    print(f"Confusion Matrix saved to: {cm_path.resolve()}")
+
+    # Sort misclassified by confidence descending (most obvious errors first)
+    misclassified.sort(key=lambda x: -x["confidence"])
+
+    # Save misclassified CSV
+    csv_path = output_dir / "misclassified.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        fieldnames = [
-            "filename",
-            "source_path",
-            "pred_id",
-            "pred_class",
-            "confidence",
-            "below_threshold",
-        ]
+        fieldnames = ["index", "filename", "true_class", "pred_class", "confidence", "path"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(results)
+        for item in misclassified:
+            writer.writerow({
+                "index": item["index"],
+                "filename": item["filename"],
+                "true_class": item["true_class"],
+                "pred_class": item["pred_class"],
+                "confidence": f"{item['confidence']:.4f}",
+                "path": item["path"],
+            })
+    print(f"Misclassified CSV saved to: {csv_path.resolve()}")
 
-    save_unlabeled_contact_sheets(results, output_dir)
-
-    print(f"Unlabeled images processed: {len(results)}")
-    print(f"Predictions CSV: {csv_path.resolve()}")
-    print(f"Contact sheets: {output_dir.resolve()}")
-    print(f"Confidence threshold: {confidence_threshold:.2f}")
-    for item in results:
-        print(
-            f"  {item['filename']} -> {item['pred_class']} "
-            f"({item['confidence']:.4f})"
-            f"{' [LOW CONF]' if item['below_threshold'] else ''}"
-        )
+    # Save contact sheets for misclassified
+    if misclassified:
+        print(f"Generating contact sheets for {len(misclassified)} misclassified images...")
+        save_contact_sheets_paged(misclassified, output_dir, prefix="misclassified", sheet_size=25, max_sheets=8)
+        print(f"Contact sheets saved to: {output_dir.resolve()}")
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Evaluate MobileNetV2 Face Occlusion Model")
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--dataset-dir",
+        default=None,
+        help="Path to an arbitrary labeled dataset directory containing class subfolders (e.g. clear/ and occluded/)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Custom output directory to save evaluation metrics, CSVs, and plots",
+    )
     parser.add_argument("--misclassified-dir", default="outputs/misclassified")
     parser.add_argument(
         "--split",
         choices=["val", "test"],
         default="test",
-        help="Labeled split to evaluate; use val when test is an unlabeled flat folder",
+        help="Labeled split to evaluate from config.yaml",
     )
     parser.add_argument(
         "--unlabeled-dir",
@@ -188,12 +222,19 @@ def main():
         help="Run inference on a flat directory of images without ground-truth labels",
     )
     parser.add_argument("--unlabeled-output-dir", default="outputs/unlabeled_test")
+    parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     checkpoint_path = Path(args.checkpoint or cfg["checkpoint"]["best_path"])
 
+    if args.dataset_dir:
+        out_dir = Path(args.output_dir or "outputs/eval_custom")
+        evaluate_dataset_dir(cfg, checkpoint_path, Path(args.dataset_dir), out_dir, batch_size=args.batch_size)
+        return
+
     if args.unlabeled_dir:
+        from test import run_unlabeled_inference
         run_unlabeled_inference(
             cfg,
             checkpoint_path,
@@ -202,127 +243,11 @@ def main():
         )
         return
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    _, val_loader, test_loader, class_names = build_loaders(cfg)
-    eval_loader = val_loader if args.split == "val" else test_loader
-    model = build_model(cfg).to(device)
-    load_checkpoint(model, checkpoint_path, device)
-    model.eval()
-
-    y_true, y_pred = [], []
-    misclassified = []
-    sample_offset = 0
-    with torch.no_grad():
-        for images, targets in eval_loader:
-            images = images.to(device)
-            logits = model(images)
-            preds = logits.argmax(dim=1).cpu().tolist()
-            targets_list = targets.tolist()
-
-            for batch_index, (target, pred) in enumerate(zip(targets_list, preds)):
-                if target != pred:
-                    image_path, folder_target = eval_loader.dataset.samples[sample_offset + batch_index]
-                    misclassified.append(
-                        {
-                            "index": sample_offset + batch_index,
-                            "path": str(image_path),
-                            "true_id": int(target),
-                            "true_class": class_names[int(target)],
-                            "pred_id": int(pred),
-                            "pred_class": class_names[int(pred)],
-                            "folder_target": int(folder_target),
-                        }
-                    )
-
-            y_pred.extend(preds)
-            y_true.extend(targets_list)
-            sample_offset += len(targets_list)
-
-    print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
-
-    confusion_dir = Path("outputs/confusion_matrix")
-    confusion_dir.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ConfusionMatrixDisplay.from_predictions(y_true, y_pred, display_labels=class_names, ax=ax, cmap="Blues")
-    fig.tight_layout()
-    fig.savefig(confusion_dir / f"{args.split}_confusion_matrix.png", dpi=150)
-    plt.close(fig)
-
-    misclassified_dir = Path(args.misclassified_dir)
-    misclassified_dir.mkdir(parents=True, exist_ok=True)
-    for stale_name in [
-        "contact_sheet.png",
-        "clear_true_occluded_pred.png",
-        "occluded_true_clear_pred.png",
-    ]:
-        stale_path = misclassified_dir / stale_name
-        if stale_path.exists():
-            stale_path.unlink()
-
-    csv_path = misclassified_dir / "misclassified.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        fieldnames = ["index", "source_path", "true_id", "true_class", "pred_id", "pred_class"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for item in misclassified:
-            writer.writerow(
-                {
-                    "index": item["index"],
-                    "source_path": item["path"],
-                    "true_id": item["true_id"],
-                    "true_class": item["true_class"],
-                    "pred_id": item["pred_id"],
-                    "pred_class": item["pred_class"],
-                }
-            )
-
-    if misclassified:
-        columns = 4
-        rows = math.ceil(len(misclassified) / columns)
-        fig, axes = plt.subplots(rows, columns, figsize=(4 * columns, 4 * rows))
-        axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
-        for ax, item in zip(axes, misclassified):
-            image = Image.open(item["path"]).convert("RGB")
-            ax.imshow(image)
-            ax.set_title(
-                f"True: {item['true_class']}\nPred: {item['pred_class']}",
-                fontsize=9,
-            )
-            ax.axis("off")
-        for ax in axes[len(misclassified):]:
-            ax.axis("off")
-        fig.tight_layout()
-        fig.savefig(misclassified_dir / "contact_sheet.png", dpi=150)
-        plt.close(fig)
-
-        save_misclassified_group(
-            misclassified,
-            misclassified_dir,
-            true_class="clear",
-            pred_class="occluded",
-            filename="clear_true_occluded_pred.png",
-        )
-        save_misclassified_group(
-            misclassified,
-            misclassified_dir,
-            true_class="occluded",
-            pred_class="clear",
-            filename="occluded_true_clear_pred.png",
-        )
-
-    print(f"Split: {args.split}")
-    print(f"Misclassified: {len(misclassified)} / {len(y_true)}")
-    print(f"Misclassified CSV: {csv_path}")
-    if misclassified:
-        print(f"Misclassified images: {misclassified_dir.resolve()}")
-        for item in misclassified:
-            print(
-                f"  [{item['index']:04d}] true={item['true_class']} | "
-                f"pred={item['pred_class']} | {item['path']}"
-            )
-    else:
-        print("No misclassified images found.")
+    # Default flow using config data.root
+    data_root = Path(cfg["data"]["root"])
+    split_dir = data_root / args.split
+    out_dir = Path(args.output_dir or f"outputs/eval_{args.split}")
+    evaluate_dataset_dir(cfg, checkpoint_path, split_dir, out_dir, batch_size=args.batch_size)
 
 
 if __name__ == "__main__":

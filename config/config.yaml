@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 2
-  dropout: 0.2
+  dropout: 0.3
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -18,7 +18,7 @@ data:
     - occluded
 
 training:
-  epochs: 200
+  epochs: 100
   seed: 42
   optimizer: sgd
   momentum: 0.90
@@ -48,7 +48,7 @@ training:
 
 augmentation:
   horizontal_flip: 0.50
-  rotation_degrees: 10
+  rotation_degrees: 15
   brightness: 0.20
   contrast: 0.20
   saturation: 0.20

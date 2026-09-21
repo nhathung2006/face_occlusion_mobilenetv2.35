@@ -488,6 +488,11 @@ def main():
     parser.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument("--checkpoint", default="checkpoints/best.pth", help="Path to checkpoint (.pth)")
     parser.add_argument(
+        "--dataset-dir",
+        default=None,
+        help="Path to an arbitrary labeled dataset folder (e.g. folder with clear/ and occluded/)",
+    )
+    parser.add_argument(
         "--split",
         choices=["train", "val", "raw"],
         default="train",
@@ -518,13 +523,13 @@ def main():
 
     cfg = load_config(args.config)
     data_root = Path(cfg["data"]["root"])
-    target_dir = data_root / args.split
+    target_dir = Path(args.dataset_dir) if args.dataset_dir else (data_root / args.split)
 
     print("=" * 60)
     print("      RAPID FACE OCCLUSION RELABELING TOOL")
     print("=" * 60)
     print(f"Data root:   {data_root}")
-    print(f"Target split:{args.split} ({target_dir})")
+    print(f"Target dir:  {target_dir}")
     print(f"Checkpoint:  {args.checkpoint}")
     print(f"Threshold:   {args.threshold}")
     print(f"Mode:        {'All images' if args.all else 'Errors + Low-confidence only'}")
