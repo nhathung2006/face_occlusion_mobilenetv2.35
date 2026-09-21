@@ -426,3 +426,16 @@ timestamp,filename,old_class,new_class,model_pred,confidence,action
 2026-09-21 22:43:14,2--Demonstration_2_Demonstration_Demonstration_Or_Protest_2_596.jpg_b58919.jpg,occluded,DELETED,occluded,0.5414,delete
 2026-09-21 22:43:30,56--Voter_56_Voter_peoplevoting_56_259.jpg_b140607.jpg,occluded,clear,occluded,0.5266,relabel
 2026-09-21 22:43:53,11--Meeting_11_Meeting_Meeting_11_Meeting_Meeting_11_529.jpg_b6235.jpg,occluded,clear,occluded,0.5005,relabel
+2026-09-21 23:10:29,12--Group_12_Group_Large_Group_12_Group_Large_Group_12_27.jpg_b30430.jpg,clear,DELETED,occluded,0.9963,delete
+2026-09-21 23:10:44,12--Group_12_Group_Team_Organized_Group_12_Group_Team_Organized_Group_12_40.jpg_b26131.jpg,clear,DELETED,occluded,0.9266,delete
+2026-09-21 23:11:15,2--Demonstration_2_Demonstration_Political_Rally_2_335.jpg_b16355.jpg,occluded,clear,clear,0.8052,relabel
+2026-09-21 23:11:22,12--Group_12_Group_Team_Organized_Group_12_Group_Team_Organized_Group_12_862.jpg_b24899.jpg,clear,occluded,occluded,0.7586,relabel
+2026-09-21 23:11:44,13--Interview_13_Interview_Interview_Sequences_13_935.jpg_b36636.jpg,occluded,clear,clear,0.6634,relabel
+2026-09-21 23:12:03,12--Group_12_Group_Large_Group_12_Group_Large_Group_12_738.jpg_b25271.jpg,occluded,clear,clear,0.6030,relabel
+2026-09-21 23:12:17,01a0b760-1ae0-72e1-b233-83b1156b5785_nvr-llWGaUl9M9E771xokkJUiNr5fMyJBigI_1789782924240_img_face.jpg,occluded,clear,clear,0.5819,relabel
+2026-09-21 23:12:35,2--Demonstration_2_Demonstration_Demonstration_Or_Protest_2_193.jpg_b81033.jpg,occluded,DELETED,clear,0.5282,delete
+2026-09-21 23:12:59,54--Rescue_54_Rescue_rescuepeople_54_817.jpg_b35088.jpg,occluded,DELETED,occluded,0.5921,delete
+2026-09-21 23:13:01,2--Demonstration_2_Demonstration_Demonstration_Or_Protest_2_414.jpg_b72348.jpg,occluded,DELETED,occluded,0.5920,delete
+2026-09-21 23:13:22,12--Group_12_Group_Large_Group_12_Group_Large_Group_12_516.jpg_b24897.jpg,occluded,DELETED,occluded,0.5490,delete
+2026-09-21 23:13:36,14--Traffic_14_Traffic_Traffic_14_301.jpg_b37743.jpg,occluded,DELETED,occluded,0.5133,delete
+2026-09-21 23:13:38,34--Baseball_34_Baseball_Baseball_34_685.jpg_b100805.jpg,occluded,DELETED,occluded,0.5113,delete
