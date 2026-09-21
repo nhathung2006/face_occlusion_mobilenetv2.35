@@ -90,7 +90,13 @@ def main():
 
         optimizer = build_optimizer(model, cfg, backbone_lr=stage2_bb_lr, classifier_lr=stage2_clf_lr)
         scheduler, step_type = build_scheduler(
-            optimizer, cfg, len(train_loader), lr=stage2_clf_lr, total_epochs=total_epochs
+            optimizer,
+            cfg,
+            len(train_loader),
+            lr=stage2_clf_lr,
+            total_epochs=total_epochs,
+            warmup_epochs=warmup_epochs,
+            warmup_start_factor=warmup_start_factor,
         )
 
     criterion = nn.CrossEntropyLoss(label_smoothing=float(cfg["training"]["label_smoothing"]))
@@ -143,10 +149,17 @@ def main():
                 model, val_loader, criterion, device, num_classes
             )
 
-        # Learning rates from parameter groups
-        lrs = [group["lr"] for group in optimizer.param_groups]
-        bb_lr = lrs[0] if len(lrs) > 1 else (0.0 if (two_stage_enabled and epoch <= stage1_epochs) else lrs[0])
-        clf_lr = lrs[1] if len(lrs) > 1 else lrs[0]
+        # Extract per-group learning rates safely by group name or index
+        group_map = {group.get("name", f"group_{i}"): group["lr"] for i, group in enumerate(optimizer.param_groups)}
+        if "backbone" in group_map and "classifier" in group_map:
+            bb_lr = float(group_map["backbone"])
+            clf_lr = float(group_map["classifier"])
+        elif len(optimizer.param_groups) > 1:
+            bb_lr = float(optimizer.param_groups[0]["lr"])
+            clf_lr = float(optimizer.param_groups[1]["lr"])
+        else:
+            clf_lr = float(optimizer.param_groups[0]["lr"])
+            bb_lr = 0.0 if (two_stage_enabled and epoch <= stage1_epochs) else clf_lr
 
         stage_tag = "S1" if (two_stage_enabled and epoch <= stage1_epochs) else "S2"
         row = {
@@ -175,7 +188,7 @@ def main():
         elif step_type == "epoch":
             scheduler.step()
 
-        lr_str = f"LR(BB: {bb_lr:.6f}, Clf: {clf_lr:.6f})" if len(lrs) > 1 else f"LR: {clf_lr:.6f}"
+        lr_str = f"LR(BB: {bb_lr:.6f}, Clf: {clf_lr:.6f})" if len(optimizer.param_groups) > 1 else f"LR: {clf_lr:.6f}"
         print(
             f"Epoch {epoch:03d}/{total_epochs:03d} [{stage_tag}] | "
             f"Train [Loss: {train_loss:.4f}, Acc: {train_m.accuracy:.4f}, Prec: {train_m.precision:.4f}, Rec: {train_m.recall:.4f}, F1: {train_m.f1:.4f}] | "

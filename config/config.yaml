@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 2
-  dropout: 0.30
+  dropout: 0.20
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -28,12 +28,12 @@ training:
   two_stage:
     enabled: true
     stage1_epochs: 8              # Giai đoạn 1: Epoch 1 -> 8 (chỉ train Classifier)
-    stage1_lr: 0.005              # LR Giai đoạn 1 (1e-3)
-    unfreeze_from_block: 11       # Giai đoạn 2: Khóa block 0 -> 10, mở từ block 11 trở đi
+    stage1_lr: 0.007              # LR Giai đoạn 1 (5e-3)
+    unfreeze_from_block: 7       # Giai đoạn 2: Khóa block 0 -> 10, mở từ block 11 trở đi
     warmup_epochs: 3              # Warmup đầu Giai đoạn 2
     warmup_start_factor: 0.1      # Bắt đầu từ 10% LR mục tiêu
     stage2_backbone_lr: 0.0002    # LR nhóm Block 11+ & Conv 1x1
-    stage2_classifier_lr: 0.002   # LR nhóm Classifier
+    stage2_classifier_lr: 0.002   # LR nhóm Classifier (gấp 10 lần Backbone LR)
 
   scheduler: cosine
   cosine:
@@ -70,4 +70,4 @@ evaluation:
   misclassified_dir: outputs/misclassified_val
 
 inference:
-  confidence_threshold: 0.50
+  confidence_threshold: 0.4
