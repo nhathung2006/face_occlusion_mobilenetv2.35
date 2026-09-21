@@ -55,23 +55,26 @@ class DatasetScanner:
 
     def scan(
         self,
-        target_dir: Path,
+        target_dir: Path | list[Path],
         confidence_threshold: float = 0.60,
         only_misclassified: bool = True,
         batch_size: int = 64,
     ) -> List[dict[str, Any]]:
+        target_dirs = [target_dir] if isinstance(target_dir, Path) else list(target_dir)
         items_to_scan = []
-        for cls_name in self.class_names:
-            cls_dir = target_dir / cls_name
-            if not cls_dir.exists():
-                continue
-            for f in sorted(cls_dir.glob("*")):
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                    items_to_scan.append({
-                        "path": f,
-                        "name": f.name,
-                        "true_class": cls_name,
-                    })
+        for t_dir in target_dirs:
+            for cls_name in self.class_names:
+                cls_dir = t_dir / cls_name
+                if not cls_dir.exists():
+                    continue
+                for f in sorted(cls_dir.glob("*")):
+                    if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
+                        items_to_scan.append({
+                            "path": f,
+                            "name": f.name,
+                            "true_class": cls_name,
+                            "split": t_dir.name,
+                        })
 
         if not items_to_scan:
             return []
@@ -297,7 +300,8 @@ class RelabelApp:
         self.lbl_progress.config(text=f"Item {self.current_idx + 1} / {len(self.items)}")
         self._update_stats_display()
 
-        self.lbl_filename.config(text=f"File: {item['name']}")
+        split_tag = f"[{item['split'].upper()}] " if "split" in item else ""
+        self.lbl_filename.config(text=f"File: {split_tag}{item['name']}")
         self.lbl_dimensions.config(text=f"Size: {item.get('width', '-')}x{item.get('height', '-')}")
 
         true_cls = item["true_class"]
@@ -494,15 +498,15 @@ def main():
     )
     parser.add_argument(
         "--split",
-        choices=["train", "val", "raw"],
-        default="train",
-        help="Dataset split to scan for errors (default: train)",
+        choices=["both", "all", "train", "val", "raw"],
+        default="both",
+        help="Dataset split to scan for errors: both (train+val), train, val, or raw (default: both)",
     )
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.60,
-        help="Confidence threshold for uncertainty (default: 0.60)",
+        default=0.80,
+        help="Confidence threshold for uncertainty (default: 0.80)",
     )
     parser.add_argument(
         "--all",
@@ -523,13 +527,22 @@ def main():
 
     cfg = load_config(args.config)
     data_root = Path(cfg["data"]["root"])
-    target_dir = Path(args.dataset_dir) if args.dataset_dir else (data_root / args.split)
+
+    if args.dataset_dir:
+        target_dir = Path(args.dataset_dir)
+        target_desc = str(target_dir)
+    elif args.split in ["both", "all"]:
+        target_dir = [data_root / "train", data_root / "val"]
+        target_desc = f"train + val ({data_root})"
+    else:
+        target_dir = data_root / args.split
+        target_desc = str(target_dir)
 
     print("=" * 60)
     print("      RAPID FACE OCCLUSION RELABELING TOOL")
     print("=" * 60)
     print(f"Data root:   {data_root}")
-    print(f"Target dir:  {target_dir}")
+    print(f"Target dir:  {target_desc}")
     print(f"Checkpoint:  {args.checkpoint}")
     print(f"Threshold:   {args.threshold}")
     print(f"Mode:        {'All images' if args.all else 'Errors + Low-confidence only'}")
@@ -558,12 +571,13 @@ def main():
         scan_csv = Path("outputs/scan_errors.csv")
         scan_csv.parent.mkdir(parents=True, exist_ok=True)
         with open(scan_csv, "w", newline="", encoding="utf-8") as f:
-            fieldnames = ["filename", "true_class", "pred_class", "confidence", "is_misclassified", "path"]
+            fieldnames = ["filename", "split", "true_class", "pred_class", "confidence", "is_misclassified", "path"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for it in items:
                 writer.writerow({
                     "filename": it["name"],
+                    "split": it.get("split", ""),
                     "true_class": it["true_class"],
                     "pred_class": it["pred_class"],
                     "confidence": f"{it['confidence']:.4f}",
@@ -577,7 +591,7 @@ def main():
     app = RelabelApp(
         items=items,
         data_root=data_root,
-        target_dir=target_dir,
+        target_dir=target_dir if isinstance(target_dir, Path) else data_root,
         output_csv=Path(args.output_csv),
     )
     app.run()
