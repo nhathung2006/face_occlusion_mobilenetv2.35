@@ -39,7 +39,12 @@ def main():
         raise ValueError(f"Dataset classes {class_names} != config classes {expected_classes}")
 
     num_classes = int(cfg["model"]["num_classes"])
-    if len(class_names) != num_classes:
+    if num_classes == 1:
+        if len(class_names) != 2:
+            raise ValueError(
+                f"num_classes=1 (binary classification), but dataset has {len(class_names)} classes (expected 2: {expected_classes})"
+            )
+    elif len(class_names) != num_classes:
         raise ValueError(f"num_classes={num_classes}, but dataset has {len(class_names)} class folders")
 
     model = build_model(cfg).to(device)
@@ -100,7 +105,13 @@ def main():
             warmup_start_factor=warmup_start_factor,
         )
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=float(cfg["training"]["label_smoothing"]))
+    label_smoothing = float(cfg["training"].get("label_smoothing", 0.05))
+    pos_weight_val = float(cfg["training"].get("pos_weight", 1.0))
+    if num_classes == 1:
+        pos_weight = torch.tensor([pos_weight_val], device=device) if pos_weight_val != 1.0 else None
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     es_cfg = cfg["training"].get("early_stopping", {})
     early_stopping = EarlyStopping(
@@ -150,11 +161,23 @@ def main():
 
         batch_scheduler = scheduler if step_type == "batch" else None
         train_loss, train_m = run_epoch(
-            model, train_loader, criterion, device, num_classes, optimizer, batch_scheduler
+            model,
+            train_loader,
+            criterion,
+            device,
+            num_classes,
+            optimizer,
+            batch_scheduler,
+            label_smoothing=label_smoothing,
         )
         with torch.no_grad():
             val_loss, val_m = run_epoch(
-                model, val_loader, criterion, device, num_classes
+                model,
+                val_loader,
+                criterion,
+                device,
+                num_classes,
+                label_smoothing=0.0,
             )
 
         # Extract per-group learning rates safely by group name or index

@@ -102,8 +102,15 @@ class DatasetScanner:
 
                 inputs = torch.stack(tensors).to(self.device)
                 logits = self.model(inputs)
-                probs = torch.softmax(logits, dim=1).cpu()
-                confidences, preds = probs.max(dim=1)
+                num_classes = int(self.cfg["model"].get("num_classes", 1))
+                if num_classes == 1:
+                    logits_1d = logits.view(-1)
+                    probs_occ = torch.sigmoid(logits_1d).cpu()
+                    preds = (probs_occ >= 0.5).long()
+                    confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
+                else:
+                    probs = torch.softmax(logits, dim=1).cpu()
+                    confidences, preds = probs.max(dim=1)
 
                 for it, pred_idx, conf in zip(valid_items, preds, confidences):
                     pred_class = self.class_names[int(pred_idx)]

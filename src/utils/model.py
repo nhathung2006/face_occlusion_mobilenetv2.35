@@ -32,7 +32,7 @@ def build_model(cfg: dict) -> nn.Module:
     dropout = float(model_cfg["dropout"])
 
     # Build a 1000-class model first so the upstream 0.35 ImageNet checkpoint
-    # can be loaded exactly, then replace the classifier for this 2-class task.
+    # can be loaded exactly, then replace the classifier for this 1-output binary occlusion task.
     model = MobileNetV2(num_classes=1000, width_mult=width_mult)
 
     pretrained_path = Path(model_cfg["pretrained_path"])

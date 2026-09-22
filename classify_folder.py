@@ -161,8 +161,15 @@ def classify_and_organize(
 
             inputs = torch.stack(batch_tensors).to(device)
             logits = model(inputs)
-            probabilities = torch.softmax(logits, dim=1).cpu()
-            confidences, predictions = probabilities.max(dim=1)
+            num_classes = int(cfg["model"].get("num_classes", 1))
+            if num_classes == 1:
+                logits_1d = logits.view(-1)
+                probs_occ = torch.sigmoid(logits_1d).cpu()
+                predictions = (probs_occ >= 0.5).long()
+                confidences = torch.where(predictions == 1, probs_occ, 1.0 - probs_occ)
+            else:
+                probabilities = torch.softmax(logits, dim=1).cpu()
+                confidences, predictions = probabilities.max(dim=1)
 
             for img_path, pred_idx, conf in zip(valid_paths, predictions, confidences):
                 conf_val = float(conf)

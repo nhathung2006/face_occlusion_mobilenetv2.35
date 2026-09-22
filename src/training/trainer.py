@@ -117,7 +117,16 @@ class EarlyStopping:
         return status
 
 
-def run_epoch(model, loader, criterion, device, num_classes, optimizer=None, lr_scheduler=None):
+def run_epoch(
+    model,
+    loader,
+    criterion,
+    device,
+    num_classes,
+    optimizer=None,
+    lr_scheduler=None,
+    label_smoothing: float = 0.0,
+):
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
@@ -132,8 +141,19 @@ def run_epoch(model, loader, criterion, device, num_classes, optimizer=None, lr_
 
         with torch.set_grad_enabled(training):
             logits = model(images)
-            loss = criterion(logits, targets)
-            preds = logits.argmax(dim=1)
+            if num_classes == 1:
+                logits = logits.view(-1)
+                targets_float = targets.float()
+                if training and label_smoothing > 0.0:
+                    targets_loss = targets_float * (1.0 - label_smoothing) + 0.5 * label_smoothing
+                else:
+                    targets_loss = targets_float
+                loss = criterion(logits, targets_loss)
+                probs = torch.sigmoid(logits)
+                preds = (probs >= 0.5).long()
+            else:
+                loss = criterion(logits, targets)
+                preds = logits.argmax(dim=1)
 
             if training:
                 loss.backward()
@@ -145,7 +165,8 @@ def run_epoch(model, loader, criterion, device, num_classes, optimizer=None, lr_
         y_true.extend(targets.detach().cpu().tolist())
         y_pred.extend(preds.detach().cpu().tolist())
 
-    metrics = compute_metrics(y_true, y_pred, num_classes=num_classes)
+    eval_num_classes = 2 if num_classes == 1 else num_classes
+    metrics = compute_metrics(y_true, y_pred, num_classes=eval_num_classes)
     return total_loss / len(loader.dataset), metrics
 
 

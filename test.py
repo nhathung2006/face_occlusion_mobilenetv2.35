@@ -129,7 +129,8 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     y_true, y_pred = [], []
     misclassified = []
     sample_offset = 0
-    criterion = torch.nn.CrossEntropyLoss()
+    num_classes = int(cfg["model"].get("num_classes", 1))
+    criterion = torch.nn.BCEWithLogitsLoss() if num_classes == 1 else torch.nn.CrossEntropyLoss()
     total_loss = 0.0
 
     start_time = time.time()
@@ -138,11 +139,19 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
             images = images.to(device, non_blocking=True)
             targets_device = targets.to(device, non_blocking=True)
             logits = model(images)
-            loss = criterion(logits, targets_device)
-            total_loss += float(loss.item()) * len(targets)
 
-            probs = torch.softmax(logits, dim=1).cpu()
-            confidences, preds = probs.max(dim=1)
+            if num_classes == 1:
+                logits_1d = logits.view(-1)
+                loss = criterion(logits_1d, targets_device.float())
+                probs_occ = torch.sigmoid(logits_1d).cpu()
+                preds = (probs_occ >= 0.5).long()
+                confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
+            else:
+                loss = criterion(logits, targets_device)
+                probs = torch.softmax(logits, dim=1).cpu()
+                confidences, preds = probs.max(dim=1)
+
+            total_loss += float(loss.item()) * len(targets)
 
             preds_list = preds.tolist()
             targets_list = targets.tolist()
