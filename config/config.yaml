@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 2
-  dropout: 0.25
+  dropout: 0.35
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -18,7 +18,7 @@ data:
     - occluded
 
 training:
-  epochs: 100
+  epochs: 110
   seed: 42
   optimizer: sgd
   momentum: 0.90
