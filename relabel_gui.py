@@ -141,7 +141,7 @@ class RelabelApp:
         self.data_root = data_root
         self.target_dir = target_dir
         self.raw_dir = data_root / "raw"
-        self.trash_dir = data_root / "_trash"
+        self.trash_dir = (target_dir if isinstance(target_dir, Path) else data_root) / "_trash"
         self.output_csv = output_csv
 
         self.current_idx = 0

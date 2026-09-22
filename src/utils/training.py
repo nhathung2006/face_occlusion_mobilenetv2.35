@@ -198,16 +198,22 @@ def build_scheduler(
 
     if name in ["reduce_on_plateau", "plateau", "reducelronplateau"]:
         p_cfg = t.get("plateau", {})
-        mode = str(p_cfg.get("mode", t.get("early_stopping", {}).get("mode", "max"))).lower()
+        monitor = str(p_cfg.get("monitor", "val_loss")).lower()
+        default_mode = "min" if "loss" in monitor else "max"
+        mode = str(p_cfg.get("mode", default_mode)).lower()
         factor = float(p_cfg.get("factor", 0.5))
-        patience = int(p_cfg.get("patience", 3))
+        patience = int(p_cfg.get("patience", 8))
         min_lr = float(p_cfg.get("min_lr", 1e-6))
+        threshold = float(p_cfg.get("threshold", 0.0005))
+        cooldown = int(p_cfg.get("cooldown", 1))
         scheduler = ReduceLROnPlateau(
             optimizer,
             mode=mode,
             factor=factor,
             patience=patience,
             min_lr=min_lr,
+            threshold=threshold,
+            cooldown=cooldown,
         )
         return scheduler, "plateau"
 

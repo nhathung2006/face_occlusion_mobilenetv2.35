@@ -13,6 +13,110 @@ from src.evaluation.metrics import compute_metrics
 from src.utils.training import save_checkpoint
 
 
+class EarlyStopping:
+    """
+    Early Stopping callback with model weight restoration, patience tracking,
+    and overfitting diagnostics.
+
+    Parameters:
+        monitor: Metric to observe (e.g. 'val_loss', 'val_f1', 'val_accuracy').
+        mode: 'min' (for loss) or 'max' (for accuracy/f1).
+        patience: Number of epochs to wait without improvement before stopping.
+        min_delta: Minimum change in the monitored quantity to qualify as an improvement.
+        restore_best_weights: Whether to restore model weights from the epoch with the best value.
+        enabled: Whether early stopping is active.
+    """
+
+    def __init__(
+        self,
+        monitor: str = "val_loss",
+        mode: str = "min",
+        patience: int = 8,
+        min_delta: float = 0.0005,
+        restore_best_weights: bool = True,
+        enabled: bool = True,
+    ):
+        self.monitor = str(monitor).strip()
+        self.mode = str(mode).strip().lower()
+        if self.mode not in ["min", "max"]:
+            self.mode = "min" if "loss" in self.monitor.lower() else "max"
+        self.patience = max(1, int(patience))
+        self.min_delta = float(min_delta)
+        self.restore_best_weights = bool(restore_best_weights)
+        self.enabled = bool(enabled)
+
+        self.patience_counter = 0
+        self.best_epoch: int | None = None
+        self.best_metric = float("inf") if self.mode == "min" else float("-inf")
+        self.best_state_dict: dict[str, torch.Tensor] | None = None
+        self.best_row: dict | None = None
+        self.stopped_epoch: int | None = None
+
+    def is_improvement(self, current: float) -> bool:
+        if self.mode == "min":
+            return (self.best_metric - current) > self.min_delta
+        return (current - self.best_metric) > self.min_delta
+
+    def step(self, epoch: int, row: dict, model: torch.nn.Module) -> bool:
+        """
+        Evaluate current metrics at end of epoch.
+        Returns True if early stopping triggers, False otherwise.
+        """
+        if self.monitor not in row:
+            raise KeyError(f"Monitored metric '{self.monitor}' not found in epoch summary row: {list(row.keys())}")
+
+        current = float(row[self.monitor])
+        improved = self.is_improvement(current)
+
+        if improved:
+            self.best_metric = current
+            self.best_epoch = epoch
+            self.best_row = row
+            self.patience_counter = 0
+            self.best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        else:
+            self.patience_counter += 1
+
+        if self.enabled and self.patience_counter >= self.patience:
+            self.stopped_epoch = epoch
+            if self.restore_best_weights and self.best_state_dict is not None:
+                self.restore(model)
+                # Reset patience counter to 0 after restoration
+                self.patience_counter = 0
+            return True
+
+        return False
+
+    def restore(self, model: torch.nn.Module) -> None:
+        """Restore the best model weights into model and reset patience."""
+        if self.best_state_dict is not None:
+            model.load_state_dict(self.best_state_dict)
+            self.patience_counter = 0
+
+    def reset_patience(self) -> None:
+        """Reset the patience counter (e.g., when transitioning between training stages)."""
+        self.patience_counter = 0
+
+    def get_status_str(self, current_row: dict | None = None) -> str:
+        """Returns concise diagnostic status including overfitting indicators."""
+        best_str = f"{self.best_metric:.4f}" if self.best_epoch is not None else "N/A"
+        epoch_str = f"Epoch {self.best_epoch:03d}" if self.best_epoch is not None else "N/A"
+        status = f"Patience: {self.patience_counter}/{self.patience} | Best {self.monitor}: {best_str} ({epoch_str})"
+
+        if current_row is not None:
+            train_loss = current_row.get("train_loss")
+            val_loss = current_row.get("val_loss")
+            train_acc = current_row.get("train_accuracy")
+            val_acc = current_row.get("val_accuracy")
+            if train_loss is not None and val_loss is not None:
+                loss_gap = float(val_loss) - float(train_loss)
+                status += f" | Loss Gap: {loss_gap:+.4f}"
+            if train_acc is not None and val_acc is not None:
+                acc_gap = float(train_acc) - float(val_acc)
+                status += f", Acc Gap: {acc_gap:+.4f}"
+        return status
+
+
 def run_epoch(model, loader, criterion, device, num_classes, optimizer=None, lr_scheduler=None):
     training = optimizer is not None
     model.train(training)

@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from src.datasets.dataset import build_loaders
-from src.training.trainer import plot_history, run_epoch, save_history
+from src.training.trainer import EarlyStopping, plot_history, run_epoch, save_history
 from src.utils.config import load_config
 from src.utils.model import (
     build_model,
@@ -56,6 +56,7 @@ def main():
     stage2_bb_lr = float(two_stage_cfg.get("stage2_backbone_lr", cfg["training"].get("backbone_lr", 0.0001)))
     stage2_clf_lr = float(two_stage_cfg.get("stage2_classifier_lr", cfg["training"].get("classifier_lr", 0.001)))
 
+    scheduler_name = str(cfg["training"].get("scheduler", "cosine")).upper()
     if two_stage_enabled and stage1_epochs > 0:
         freeze_backbone(model)
         trainable_s1 = count_trainable_parameters(model)
@@ -65,7 +66,7 @@ def main():
         print(f"  Trainable parameters:  {trainable_s1:,} ({trainable_s1/total_params*100:.2f}%) - Only Classifier")
         print(f"  Optimizer:             {str(cfg['training']['optimizer']).upper()} (Momentum: {cfg['training'].get('momentum', 0.9)}, Nesterov: {cfg['training'].get('nesterov', True)}, Weight Decay: {cfg['training'].get('weight_decay', 1e-4)})")
         print(f"  Stage 1 LR:            {stage1_lr}")
-        print(f"  Scheduler:             CosineAnnealingLR (T_max: {stage1_epochs}, eta_min: {cfg['training'].get('cosine', {}).get('eta_min', 1e-6)})")
+        print(f"  Scheduler:             {scheduler_name}")
         print("=" * 65 + "\n")
 
         optimizer = build_optimizer(model, cfg, lr=stage1_lr)
@@ -85,7 +86,7 @@ def main():
         print(f"  Optimizer:             {str(cfg['training']['optimizer']).upper()} (Momentum: {cfg['training'].get('momentum', 0.9)}, Nesterov: {cfg['training'].get('nesterov', True)}, Weight Decay: {cfg['training'].get('weight_decay', 1e-4)})")
         print(f"  Backbone LR:           {stage2_bb_lr}")
         print(f"  Classifier LR:          {stage2_clf_lr}")
-        print(f"  Scheduler:             CosineAnnealingLR (T_max: {total_epochs}, eta_min: {cfg['training'].get('cosine', {}).get('eta_min', 1e-6)})")
+        print(f"  Scheduler:             {scheduler_name}")
         print("=" * 65 + "\n")
 
         optimizer = build_optimizer(model, cfg, backbone_lr=stage2_bb_lr, classifier_lr=stage2_clf_lr)
@@ -101,9 +102,16 @@ def main():
 
     criterion = nn.CrossEntropyLoss(label_smoothing=float(cfg["training"]["label_smoothing"]))
 
-    best_metric = float("-inf")
+    es_cfg = cfg["training"].get("early_stopping", {})
+    early_stopping = EarlyStopping(
+        monitor=str(es_cfg.get("monitor", "val_loss")),
+        mode=str(es_cfg.get("mode", "min")),
+        patience=int(es_cfg.get("patience", 16)),
+        min_delta=float(es_cfg.get("min_delta", 0.0005)),
+        restore_best_weights=bool(es_cfg.get("restore_best_weights", True)),
+        enabled=bool(es_cfg.get("enabled", True)),
+    )
     best_epoch_info = None
-    patience_counter = 0
     history = []
 
     best_path = Path(cfg["checkpoint"]["best_path"])
@@ -125,7 +133,7 @@ def main():
             print(f"  Backbone LR (Block 11+ & Conv): {stage2_bb_lr}")
             print(f"  Classifier LR:          {stage2_clf_lr}")
             print(f"  Warmup:                 {warmup_epochs} epochs (start factor: {warmup_start_factor:.2f})")
-            print(f"  Scheduler:             CosineAnnealingLR (T_max: {remaining_epochs}, eta_min: {cfg['training'].get('cosine', {}).get('eta_min', 1e-6)})")
+            print(f"  Scheduler:             {scheduler_name}")
             print("=" * 65 + "\n")
 
             optimizer = build_optimizer(model, cfg, backbone_lr=stage2_bb_lr, classifier_lr=stage2_clf_lr)
@@ -138,7 +146,7 @@ def main():
                 warmup_epochs=warmup_epochs,
                 warmup_start_factor=warmup_start_factor,
             )
-            patience_counter = 0
+            early_stopping.reset_patience()
 
         batch_scheduler = scheduler if step_type == "batch" else None
         train_loss, train_m = run_epoch(
@@ -182,9 +190,17 @@ def main():
         history.append(row)
 
         if step_type == "plateau":
-            plateau_monitor = str(cfg["training"].get("plateau", {}).get("monitor", "val_f1"))
-            plateau_val = row.get(plateau_monitor, val_loss)
+            plateau_cfg = cfg["training"].get("plateau", {})
+            plateau_monitor = str(plateau_cfg.get("monitor", "val_loss"))
+            plateau_val = float(row.get(plateau_monitor, val_loss))
+            prev_lrs = [group["lr"] for group in optimizer.param_groups]
             scheduler.step(plateau_val)
+            new_lrs = [group["lr"] for group in optimizer.param_groups]
+            if any(n_lr < p_lr for n_lr, p_lr in zip(new_lrs, prev_lrs)):
+                print(f"  >>> [ReduceLROnPlateau] {plateau_monitor} chững lại sau {plateau_cfg.get('patience', 8)} epoch. Hạ Learning Rate:")
+                for i, (n_lr, p_lr) in enumerate(zip(new_lrs, prev_lrs)):
+                    g_name = optimizer.param_groups[i].get("name", f"group_{i}")
+                    print(f"      Group '{g_name}': {p_lr:.6e} -> {n_lr:.6e}")
         elif step_type == "epoch":
             scheduler.step()
 
@@ -196,34 +212,42 @@ def main():
             f"{lr_str}"
         )
 
-        save_checkpoint(last_path, model, optimizer, epoch, best_metric, history, cfg)
+        save_checkpoint(last_path, model, optimizer, epoch, early_stopping.best_metric, history, cfg)
 
-        monitor = str(cfg["training"]["early_stopping"]["monitor"])
-        current = float(row[monitor])
-        mode = str(cfg["training"]["early_stopping"]["mode"]).lower()
-        improved = current > best_metric if mode == "max" else current < best_metric
-        if improved:
-            best_metric = current
+        should_stop = early_stopping.step(epoch, row, model)
+        if early_stopping.best_epoch == epoch:
             best_epoch_info = row
-            patience_counter = 0
             saved_best_path = save_checkpoint(
-                best_path, model, optimizer, epoch, best_metric, history, cfg
+                best_path, model, optimizer, epoch, early_stopping.best_metric, history, cfg
             )
             best_path = Path(saved_best_path)
             print(
                 f"  >>> Saved new best checkpoint at Epoch {epoch:03d} "
-                f"({monitor}: {current:.4f}) to {best_path}"
+                f"({early_stopping.monitor}: {early_stopping.best_metric:.4f}) to {best_path}"
             )
-        else:
-            patience_counter += 1
+
+        status_str = early_stopping.get_status_str(row)
+        print(f"      [{status_str}]")
 
         if (
-            bool(cfg["training"]["early_stopping"]["enabled"])
+            should_stop
             and (not two_stage_enabled or epoch > stage1_epochs)
-            and patience_counter >= int(cfg["training"]["early_stopping"]["patience"])
         ):
-            print(f"\nEarly stopping triggered after {patience_counter} epochs without improvement in Stage 2.")
+            print(
+                f"\nEarly stopping triggered at Epoch {epoch:03d}: "
+                f"'{early_stopping.monitor}' không cải thiện trong {early_stopping.patience} epoch."
+            )
+            if early_stopping.restore_best_weights:
+                print(
+                    f"  >>> Đã khôi phục weights tốt nhất từ Epoch {early_stopping.best_epoch:03d} "
+                    f"({early_stopping.monitor}: {early_stopping.best_metric:.4f}). Patience được reset về 0."
+                )
             break
+
+    if early_stopping.restore_best_weights and early_stopping.best_state_dict is not None:
+        early_stopping.restore(model)
+        if early_stopping.best_row is not None:
+            best_epoch_info = early_stopping.best_row
 
     save_history(history, Path("outputs/history.csv"))
     plot_history(history, Path("outputs/plots"))
@@ -260,7 +284,7 @@ def main():
             )
 
     print("\n" + "=" * 65)
-    print("                     TRAINING SUMMARY (BEST F1)")
+    print(f"               TRAINING SUMMARY (BEST {str(early_stopping.monitor).upper()})")
     print("=" * 65)
     if best_epoch_info is not None:
         print(f"  Best Epoch:       {best_epoch_info['epoch']:03d} / {total_epochs:03d} [Stage {best_epoch_info.get('stage', 'N/A')}]")

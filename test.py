@@ -23,13 +23,41 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from PIL import Image
-from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score
 
 from src.datasets.dataset import build_loaders, build_transforms
 from src.utils.config import load_config
 from src.utils.model import build_model
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+class ExplicitClassImageDataset(torch.utils.data.Dataset):
+    def __init__(self, root: Path, class_names: list[str], transform=None):
+        self.samples = []
+        self.classes = list(class_names)
+        self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
+        self.transform = transform
+
+        for cls_name in self.classes:
+            cls_dir = root / cls_name
+            if not cls_dir.exists():
+                continue
+            idx = self.class_to_idx[cls_name]
+            for img_path in sorted(cls_dir.iterdir()):
+                if img_path.is_file() and img_path.suffix.lower() in IMAGE_EXTENSIONS:
+                    self.samples.append((str(img_path), idx))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, target = self.samples[idx]
+        with Image.open(path) as img:
+            image = img.convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+        return image, target
 
 
 def load_checkpoint(model, checkpoint_path: Path, device):
@@ -84,8 +112,8 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     class_names = list(cfg["data"]["class_names"])
     _, eval_transform = build_transforms(cfg)
 
-    # Use ImageFolder for labeled dataset
-    test_ds = datasets.ImageFolder(dataset_dir, transform=eval_transform)
+    # Use ExplicitClassImageDataset for labeled dataset
+    test_ds = ExplicitClassImageDataset(dataset_dir, class_names=class_names, transform=eval_transform)
     test_loader = DataLoader(
         test_ds,
         batch_size=batch_size,
@@ -101,12 +129,18 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     y_true, y_pred = [], []
     misclassified = []
     sample_offset = 0
+    criterion = torch.nn.CrossEntropyLoss()
+    total_loss = 0.0
 
     start_time = time.time()
     with torch.inference_mode():
         for batch_idx, (images, targets) in enumerate(test_loader):
             images = images.to(device, non_blocking=True)
+            targets_device = targets.to(device, non_blocking=True)
             logits = model(images)
+            loss = criterion(logits, targets_device)
+            total_loss += float(loss.item()) * len(targets)
+
             probs = torch.softmax(logits, dim=1).cpu()
             confidences, preds = probs.max(dim=1)
 
@@ -144,14 +178,20 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Calculate metrics
+    avg_loss = total_loss / len(y_true) if y_true else 0.0
     acc = accuracy_score(y_true, y_pred)
-    macro_f1 = f1_score(y_true, y_pred, average="macro")
+    macro_precision = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    macro_recall = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
     print("\n" + "=" * 65)
     print("                    EVALUATION REPORT")
     print("=" * 65)
     print(f"Total Samples:       {len(y_true)}")
+    print(f"Cross-Entropy Loss:  {avg_loss:.4f}")
     print(f"Overall Accuracy:    {acc * 100:.2f}%")
+    print(f"Macro Precision:     {macro_precision * 100:.2f}%")
+    print(f"Macro Recall:        {macro_recall * 100:.2f}%")
     print(f"Macro F1-Score:      {macro_f1 * 100:.2f}%")
     print(f"Misclassified Total: {len(misclassified)} / {len(y_true)} ({len(misclassified)/len(y_true)*100:.2f}%)")
     print("-" * 65)
@@ -197,6 +237,12 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate MobileNetV2 Face Occlusion Model")
+    parser.add_argument(
+        "pos_dataset_dir",
+        nargs="?",
+        default=None,
+        help="Optional positional path to labeled dataset folder (containing clear/ and occluded/)",
+    )
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument(
@@ -212,9 +258,9 @@ def main():
     parser.add_argument("--misclassified-dir", default="outputs/misclassified")
     parser.add_argument(
         "--split",
-        choices=["val", "test"],
-        default="test",
-        help="Labeled split to evaluate from config.yaml",
+        choices=["val", "test", "auto"],
+        default="auto",
+        help="Labeled split to evaluate from config.yaml: val, test, or auto (default: auto)",
     )
     parser.add_argument(
         "--unlabeled-dir",
@@ -228,25 +274,30 @@ def main():
     cfg = load_config(args.config)
     checkpoint_path = Path(args.checkpoint or cfg["checkpoint"]["best_path"])
 
-    if args.dataset_dir:
-        out_dir = Path(args.output_dir or "outputs/eval_custom")
-        evaluate_dataset_dir(cfg, checkpoint_path, Path(args.dataset_dir), out_dir, batch_size=args.batch_size)
-        return
-
-    if args.unlabeled_dir:
-        from test import run_unlabeled_inference
-        run_unlabeled_inference(
-            cfg,
-            checkpoint_path,
-            Path(args.unlabeled_dir),
-            Path(args.unlabeled_output_dir),
-        )
+    target_dataset_dir = args.dataset_dir or args.pos_dataset_dir
+    if target_dataset_dir:
+        target_path = Path(target_dataset_dir)
+        out_dir = Path(args.output_dir or (target_path / "eval_results"))
+        evaluate_dataset_dir(cfg, checkpoint_path, target_path, out_dir, batch_size=args.batch_size)
         return
 
     # Default flow using config data.root
     data_root = Path(cfg["data"]["root"])
-    split_dir = data_root / args.split
-    out_dir = Path(args.output_dir or f"outputs/eval_{args.split}")
+    if args.split == "auto":
+        split_name = "test" if (data_root / "test").exists() else "val"
+    else:
+        split_name = args.split
+
+    split_dir = data_root / split_name
+    if not split_dir.exists():
+        if (data_root / "val").exists():
+            print(f"Directory {split_dir} not found. Falling back to validation set: {data_root / 'val'}")
+            split_dir = data_root / "val"
+            split_name = "val"
+        else:
+            raise FileNotFoundError(f"Dataset directory not found: {split_dir}")
+
+    out_dir = Path(args.output_dir or f"outputs/eval_{split_name}")
     evaluate_dataset_dir(cfg, checkpoint_path, split_dir, out_dir, batch_size=args.batch_size)
 
 
