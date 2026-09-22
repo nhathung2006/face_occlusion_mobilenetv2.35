@@ -23,7 +23,7 @@ training:
   optimizer: sgd
   momentum: 0.90
   nesterov: true
-  weight_decay: 0.0002
+  weight_decay: 0.0005
 
   two_stage:
     enabled: true
@@ -39,7 +39,7 @@ training:
   cosine:
     eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6)
 
-  label_smoothing: 0.0
+  label_smoothing: 0.1
   early_stopping:
     enabled: true
     patience: 20
