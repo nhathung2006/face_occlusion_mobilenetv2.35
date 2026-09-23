@@ -633,3 +633,11 @@ timestamp,filename,old_class,new_class,model_pred,confidence,action
 2026-09-23 07:41:19,50--Celebration_Or_Party_50_Celebration_Or_Party_houseparty_50_321.jpg_b133597.jpg,occluded,clear,occluded,0.6317,relabel
 2026-09-23 07:45:06,0--Parade_0_Parade_marchingband_1_561.jpg_b3332.jpg,occluded,clear,occluded,0.5416,relabel
 2026-09-23 07:45:39,26--Soldier_Drilling_26_Soldier_Drilling_Soldiers_Drilling_26_420.jpg_b92463.jpg,occluded,clear,occluded,0.5028,relabel
+2026-09-23 10:41:48,18--Concerts_18_Concerts_Concerts_18_660.jpg_b43572.jpg,occluded,clear,clear,0.5205,relabel
+2026-09-23 10:42:14,10--People_Marching_10_People_Marching_People_Marching_10_People_Marching_People_Marching_10_People_Marching_People_Marching_10_599.jpg_b17130.jpg,occluded,clear,occluded,0.5936,relabel
+2026-09-23 10:42:18,01a0b352-a120-7b90-872b-2b499a2c2064_nvr-llWGaUl9M9E771xokkJUiNr5fMyJBigI_1789714932155_img_face2.jpg,occluded,clear,occluded,0.5903,relabel
+2026-09-23 10:42:26,004888_face.jpg,occluded,clear,occluded,0.5875,relabel
+2026-09-23 10:42:31,004748_face1.jpg,occluded,clear,occluded,0.5836,relabel
+2026-09-23 10:42:34,18--Concerts_18_Concerts_Concerts_18_522.jpg_b11175.jpg,occluded,clear,occluded,0.5792,relabel
+2026-09-23 10:42:41,007634_face.jpg,occluded,clear,occluded,0.5744,relabel
+2026-09-23 10:42:50,12--Group_12_Group_Group_12_Group_Group_12_124.jpg_b26389.jpg,occluded,clear,occluded,0.5583,relabel
