@@ -26,6 +26,7 @@ from PIL import Image
 from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score
 
 from src.datasets.dataset import build_loaders, build_transforms
+from src.training.losses import build_loss_criterion
 from src.utils.config import load_config
 from src.utils.model import build_model
 
@@ -100,7 +101,14 @@ def save_contact_sheets_paged(items: list[dict], output_dir: Path, prefix: str =
         plt.close(fig)
 
 
-def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, output_dir: Path, batch_size: int = 64) -> None:
+def evaluate_dataset_dir(
+    cfg: dict,
+    checkpoint_path: Path,
+    dataset_dir: Path,
+    output_dir: Path,
+    batch_size: int = 64,
+    use_tta: bool = False,
+) -> None:
     if not dataset_dir.exists():
         raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
 
@@ -108,6 +116,7 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     print(f"Using device: {device}")
     print(f"Evaluating dataset from: {dataset_dir.resolve()}")
     print(f"Loading checkpoint: {checkpoint_path.resolve()}")
+    print(f"Test-Time Augmentation (TTA): {'ENABLED (2-pass Horizontal Flip)' if use_tta else 'DISABLED'}")
 
     class_names = list(cfg["data"]["class_names"])
     _, eval_transform = build_transforms(cfg)
@@ -127,10 +136,11 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     model.eval()
 
     y_true, y_pred = [], []
+    all_logits, all_probs = [], []
     misclassified = []
     sample_offset = 0
     num_classes = int(cfg["model"].get("num_classes", 1))
-    criterion = torch.nn.BCEWithLogitsLoss() if num_classes == 1 else torch.nn.CrossEntropyLoss()
+    criterion = build_loss_criterion(cfg, device)
     total_loss = 0.0
 
     start_time = time.time()
@@ -138,7 +148,14 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
         for batch_idx, (images, targets) in enumerate(test_loader):
             images = images.to(device, non_blocking=True)
             targets_device = targets.to(device, non_blocking=True)
-            logits = model(images)
+            
+            if use_tta:
+                images_flipped = torch.flip(images, dims=[3])
+                logits_orig = model(images)
+                logits_flip = model(images_flipped)
+                logits = (logits_orig + logits_flip) * 0.5
+            else:
+                logits = model(images)
 
             if num_classes == 1:
                 logits_1d = logits.view(-1)
@@ -146,6 +163,8 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
                 probs_occ = torch.sigmoid(logits_1d).cpu()
                 preds = (probs_occ >= 0.5).long()
                 confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
+                all_logits.extend(logits_1d.cpu().tolist())
+                all_probs.extend(probs_occ.tolist())
             else:
                 loss = criterion(logits, targets_device)
                 probs = torch.softmax(logits, dim=1).cpu()
@@ -194,8 +213,9 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
     print("\n" + "=" * 65)
-    print("                    EVALUATION REPORT")
+    print(f"                    EVALUATION REPORT {'(TTA: 2-PASS FLIP)' if use_tta else ''}")
     print("=" * 65)
+    print(f"TTA Enabled:         {use_tta}")
     print(f"Total Samples:       {len(y_true)}")
     print(f"Cross-Entropy Loss:  {avg_loss:.4f}")
     print(f"Overall Accuracy:    {acc * 100:.2f}%")
@@ -203,6 +223,10 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     print(f"Macro Recall:        {macro_recall * 100:.2f}%")
     print(f"Macro F1-Score:      {macro_f1 * 100:.2f}%")
     print(f"Misclassified Total: {len(misclassified)} / {len(y_true)} ({len(misclassified)/len(y_true)*100:.2f}%)")
+    if all_logits:
+        import numpy as np
+        print(f"Logits Range:        [{np.min(all_logits):.3f}, {np.max(all_logits):.3f}] (Mean: {np.mean(all_logits):.3f}, Std: {np.std(all_logits):.3f})")
+        print(f"Sigmoid Prob Range:  [{np.min(all_probs):.4f}, {np.max(all_probs):.4f}] (Mean: {np.mean(all_probs):.4f})")
     print("-" * 65)
     print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
     print("=" * 65)
@@ -278,16 +302,30 @@ def main():
     )
     parser.add_argument("--unlabeled-output-dir", default="outputs/unlabeled_test")
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--tta",
+        dest="tta",
+        action="store_true",
+        default=None,
+        help="Enable 2-pass horizontal flip Test-Time Augmentation (TTA)",
+    )
+    parser.add_argument(
+        "--no-tta",
+        dest="tta",
+        action="store_false",
+        help="Disable Test-Time Augmentation (TTA)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    use_tta = args.tta if args.tta is not None else bool(cfg.get("evaluation", {}).get("use_tta", False))
     checkpoint_path = Path(args.checkpoint or cfg["checkpoint"]["best_path"])
 
     target_dataset_dir = args.dataset_dir or args.pos_dataset_dir
     if target_dataset_dir:
         target_path = Path(target_dataset_dir)
         out_dir = Path(args.output_dir or (target_path / "eval_results"))
-        evaluate_dataset_dir(cfg, checkpoint_path, target_path, out_dir, batch_size=args.batch_size)
+        evaluate_dataset_dir(cfg, checkpoint_path, target_path, out_dir, batch_size=args.batch_size, use_tta=use_tta)
         return
 
     # Default flow using config data.root
@@ -307,7 +345,7 @@ def main():
             raise FileNotFoundError(f"Dataset directory not found: {split_dir}")
 
     out_dir = Path(args.output_dir or f"outputs/eval_{split_name}")
-    evaluate_dataset_dir(cfg, checkpoint_path, split_dir, out_dir, batch_size=args.batch_size)
+    evaluate_dataset_dir(cfg, checkpoint_path, split_dir, out_dir, batch_size=args.batch_size, use_tta=use_tta)
 
 
 if __name__ == "__main__":

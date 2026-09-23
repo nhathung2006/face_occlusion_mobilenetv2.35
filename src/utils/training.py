@@ -176,6 +176,222 @@ class WarmupCosinePerGroupScheduler:
         return lrs
 
 
+class PlateauThenCosineScheduler:
+    """
+    Plateau-to-Cosine Transition Scheduler with Secondary Decay:
+    - Phase 1 (Plateau / Fast Convergence): Keeps high learning rate (with initial Warmup)
+      as long as the monitored metric (e.g. val_loss) continues to improve.
+    - Transition: If val_loss does not improve for `patience` (5) epochs, switches to Phase 2 (Cosine Annealing).
+    - Phase 2 (Cosine Annealing + Reactive Decay): LR decays smoothly along the Cosine curve.
+      If val_loss continues not to improve for another `patience` (5) epochs, LR is scaled down by `factor` (0.65x).
+    """
+
+    def __init__(
+        self,
+        optimizer,
+        total_epochs: int,
+        warmup_epochs: int = 0,
+        warmup_start_factor: float = 0.1,
+        eta_min: float = 1e-6,
+        patience: int = 5,
+        factor: float = 0.65,
+        threshold: float = 0.0005,
+        mode: str = "min",
+        min_scale: float = 1e-4,
+    ):
+        self.optimizer = optimizer
+        self.total_epochs = max(1, int(total_epochs))
+        self.warmup_epochs = max(0, int(warmup_epochs))
+        self.warmup_start_factor = float(warmup_start_factor)
+        self.eta_min = float(eta_min)
+        self.patience = int(patience)
+        self.factor = float(factor)
+        self.threshold = float(threshold)
+        self.mode = str(mode).lower()
+        self.min_scale = float(min_scale)
+
+        self.epoch = 0
+        self.phase = "plateau"
+        self.base_lrs = [float(group.get("initial_lr", group["lr"])) for group in optimizer.param_groups]
+        self.best_metric = float("inf") if self.mode == "min" else float("-inf")
+        self.num_bad_epochs = 0
+        self.cosine_start_epoch = 0
+        self.cosine_start_lrs = list(self.base_lrs)
+        self.scale = 1.0
+
+        # Initialize for epoch 0
+        self._update_lrs(0)
+
+    def _is_better(self, current: float, best: float) -> bool:
+        if self.mode == "min":
+            return current < best - self.threshold
+        return current > best + self.threshold
+
+    def _calc_lrs(self, epoch: int) -> list[float]:
+        if self.phase == "plateau":
+            if self.warmup_epochs > 0 and epoch <= self.warmup_epochs:
+                progress = min(max(epoch / self.warmup_epochs, 0.0), 1.0)
+                warmup_factor = self.warmup_start_factor + (1.0 - self.warmup_start_factor) * progress
+                return [max(self.eta_min, b_lr * warmup_factor) for b_lr in self.base_lrs]
+            return list(self.base_lrs)
+        else:
+            # Cosine decay scaled by self.scale across remaining epochs
+            decay_epochs = max(1, self.total_epochs - self.cosine_start_epoch)
+            progress = (epoch - self.cosine_start_epoch) / decay_epochs
+            progress = min(max(progress, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return [
+                self.eta_min + max(0.0, (start_lr * self.scale) - self.eta_min) * cosine
+                for start_lr in self.cosine_start_lrs
+            ]
+
+    def _update_lrs(self, epoch: int) -> list[float]:
+        lrs = self._calc_lrs(epoch)
+        for group, lr in zip(self.optimizer.param_groups, lrs):
+            group["lr"] = lr
+        return lrs
+
+    def step(self, metrics: float | None = None) -> tuple[list[float], str | None]:
+        """
+        Steps the scheduler.
+        Returns (current_lrs, event_type) where event_type is:
+          - 'switched_to_cosine' when transitioning from Plateau to Cosine
+          - 'reduced_by_factor' when LR scale is reduced by factor (0.65x)
+          - None otherwise
+        """
+        self.epoch += 1
+        event = None
+
+        if metrics is not None:
+            if self.phase == "plateau" and (self.epoch > self.warmup_epochs):
+                if self._is_better(metrics, self.best_metric):
+                    self.best_metric = metrics
+                    self.num_bad_epochs = 0
+                else:
+                    self.num_bad_epochs += 1
+                    if self.num_bad_epochs >= self.patience:
+                        self.phase = "cosine"
+                        self.cosine_start_epoch = self.epoch
+                        self.cosine_start_lrs = [float(g["lr"]) for g in self.optimizer.param_groups]
+                        self.num_bad_epochs = 0
+                        event = "switched_to_cosine"
+            elif self.phase == "cosine":
+                if self._is_better(metrics, self.best_metric):
+                    self.best_metric = metrics
+                    self.num_bad_epochs = 0
+                else:
+                    self.num_bad_epochs += 1
+                    if self.num_bad_epochs >= self.patience:
+                        new_scale = max(self.min_scale, self.scale * self.factor)
+                        if new_scale < self.scale:
+                            self.scale = new_scale
+                            self.num_bad_epochs = 0
+                            event = "reduced_by_factor"
+
+        lrs = self._update_lrs(self.epoch)
+        return lrs, event
+
+
+class AdaptiveCosinePlateauScheduler:
+    """
+    Adaptive Cosine-Plateau Hybrid Scheduler:
+    - Base trajectory: Smooth Warmup + Cosine Annealing decay across epochs.
+    - Reactive control: If a monitored metric (e.g. val_loss) plateaus for `patience` epochs,
+      it multiplies the adaptive scale factor by `plateau_factor` (e.g. 0.5), accelerating decay.
+    """
+
+    def __init__(
+        self,
+        optimizer,
+        total_epochs: int,
+        warmup_epochs: int = 0,
+        warmup_start_factor: float = 0.1,
+        eta_min: float = 1e-6,
+        plateau_factor: float = 0.5,
+        patience: int = 5,
+        threshold: float = 0.0005,
+        mode: str = "min",
+        cooldown: int = 1,
+        min_scale: float = 1e-4,
+    ):
+        self.optimizer = optimizer
+        self.total_epochs = max(1, int(total_epochs))
+        self.warmup_epochs = max(0, int(warmup_epochs))
+        self.warmup_start_factor = float(warmup_start_factor)
+        self.eta_min = float(eta_min)
+
+        # Plateau parameters
+        self.plateau_factor = float(plateau_factor)
+        self.patience = int(patience)
+        self.threshold = float(threshold)
+        self.mode = str(mode).lower()
+        self.cooldown = int(cooldown)
+        self.min_scale = float(min_scale)
+
+        self.epoch = 0
+        self.base_lrs = [float(group.get("initial_lr", group["lr"])) for group in optimizer.param_groups]
+        self.scale = 1.0
+        self.num_bad_epochs = 0
+        self.cooldown_counter = 0
+        self.best_metric = float("inf") if self.mode == "min" else float("-inf")
+
+        # Set initial learning rates for epoch 0
+        self._update_lrs(0)
+
+    def _is_better(self, current: float, best: float) -> bool:
+        if self.mode == "min":
+            return current < best - self.threshold
+        return current > best + self.threshold
+
+    def _calc_lrs(self, epoch: int) -> list[float]:
+        scaled_base_lrs = [max(self.eta_min, b_lr * self.scale) for b_lr in self.base_lrs]
+
+        if self.warmup_epochs > 0 and epoch <= self.warmup_epochs:
+            progress = min(max(epoch / self.warmup_epochs, 0.0), 1.0)
+            factor = self.warmup_start_factor + (1.0 - self.warmup_start_factor) * progress
+            return [max(self.eta_min, b_lr * factor) for b_lr in scaled_base_lrs]
+        else:
+            progress = (epoch - self.warmup_epochs) / max(1, self.total_epochs - self.warmup_epochs)
+            progress = min(max(progress, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return [self.eta_min + max(0.0, b_lr - self.eta_min) * cosine for b_lr in scaled_base_lrs]
+
+    def _update_lrs(self, epoch: int) -> list[float]:
+        lrs = self._calc_lrs(epoch)
+        for group, lr in zip(self.optimizer.param_groups, lrs):
+            group["lr"] = lr
+        return lrs
+
+    def step(self, metrics: float | None = None) -> tuple[list[float], bool]:
+        """
+        Steps the scheduler. If `metrics` is given, updates plateau tracking.
+        Returns (current_lrs, was_reduced_by_plateau).
+        """
+        self.epoch += 1
+        reduced_by_plateau = False
+
+        if metrics is not None:
+            if self.cooldown_counter > 0:
+                self.cooldown_counter -= 1
+                self.num_bad_epochs = 0
+            elif self._is_better(metrics, self.best_metric):
+                self.best_metric = metrics
+                self.num_bad_epochs = 0
+            else:
+                self.num_bad_epochs += 1
+
+            if self.num_bad_epochs >= self.patience:
+                new_scale = max(self.min_scale, self.scale * self.plateau_factor)
+                if new_scale < self.scale:
+                    self.scale = new_scale
+                    reduced_by_plateau = True
+                    self.cooldown_counter = self.cooldown
+                    self.num_bad_epochs = 0
+
+        lrs = self._update_lrs(self.epoch)
+        return lrs, reduced_by_plateau
+
+
 def build_scheduler(
     optimizer,
     cfg: dict,
@@ -191,10 +407,61 @@ def build_scheduler(
       - 'batch': stepped every batch iteration (e.g. WarmupCosineScheduler)
       - 'epoch': stepped once per epoch (e.g. WarmupCosinePerGroupScheduler, StepLR)
       - 'plateau': stepped once per epoch with a metric value (e.g. ReduceLROnPlateau)
+      - 'cosine_plateau': hybrid stepped once per epoch with a metric value (AdaptiveCosinePlateauScheduler)
     """
     t = cfg["training"]
-    name = str(t.get("scheduler", "cosine")).lower()
+    name = str(t.get("scheduler", "plateau_to_cosine")).lower()
     epochs = int(total_epochs if total_epochs is not None else t["epochs"])
+
+    if name in ["plateau_to_cosine", "plateau_then_cosine", "plateau_cosine"]:
+        c_cfg = t.get("cosine", {})
+        p_cfg = t.get("plateau", {})
+        eta_min = float(c_cfg.get("eta_min", 1e-6))
+        patience = int(p_cfg.get("patience", 5))
+        factor = float(p_cfg.get("factor", 0.65))
+        threshold = float(p_cfg.get("threshold", 0.0005))
+        monitor = str(p_cfg.get("monitor", "val_loss")).lower()
+        default_mode = "min" if "loss" in monitor else "max"
+        mode = str(p_cfg.get("mode", default_mode)).lower()
+
+        scheduler = PlateauThenCosineScheduler(
+            optimizer,
+            total_epochs=epochs,
+            warmup_epochs=warmup_epochs,
+            warmup_start_factor=warmup_start_factor,
+            eta_min=eta_min,
+            patience=patience,
+            factor=factor,
+            threshold=threshold,
+            mode=mode,
+        )
+        return scheduler, "plateau_to_cosine"
+
+    if name in ["cosine_plateau", "adaptive_cosine_plateau", "hybrid", "cosine_adaptive"]:
+        c_cfg = t.get("cosine", {})
+        p_cfg = t.get("plateau", {})
+        eta_min = float(c_cfg.get("eta_min", 1e-6))
+        factor = float(p_cfg.get("factor", 0.5))
+        patience = int(p_cfg.get("patience", 5))
+        threshold = float(p_cfg.get("threshold", 0.0005))
+        monitor = str(p_cfg.get("monitor", "val_loss")).lower()
+        default_mode = "min" if "loss" in monitor else "max"
+        mode = str(p_cfg.get("mode", default_mode)).lower()
+        cooldown = int(p_cfg.get("cooldown", 1))
+
+        scheduler = AdaptiveCosinePlateauScheduler(
+            optimizer,
+            total_epochs=epochs,
+            warmup_epochs=warmup_epochs,
+            warmup_start_factor=warmup_start_factor,
+            eta_min=eta_min,
+            plateau_factor=factor,
+            patience=patience,
+            threshold=threshold,
+            mode=mode,
+            cooldown=cooldown,
+        )
+        return scheduler, "cosine_plateau"
 
     if name in ["reduce_on_plateau", "plateau", "reducelronplateau"]:
         p_cfg = t.get("plateau", {})
