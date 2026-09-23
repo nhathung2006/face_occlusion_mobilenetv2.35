@@ -137,7 +137,7 @@ def run_epoch(
     y_true, y_pred = [], []
     all_logits, all_probs = [], []
 
-    for images, targets in tqdm(loader, leave=False):
+    for images, targets in tqdm(loader, leave=False, ascii=True):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 

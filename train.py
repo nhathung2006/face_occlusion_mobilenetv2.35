@@ -5,6 +5,17 @@ from pathlib import Path
 import subprocess
 import sys
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import torch
 import torch.nn as nn
 
@@ -67,7 +78,7 @@ def main():
         freeze_backbone(model)
         trainable_s1 = count_trainable_parameters(model)
         print("\n" + "=" * 65)
-        print(f"=== GIAI ĐOẠN 1: CLASSIFIER WARMUP (Epoch 1 -> {stage1_epochs}) ===")
+        print(f"=== STAGE 1: CLASSIFIER WARMUP (Epoch 1 -> {stage1_epochs}) ===")
         print(f"  Total parameters:      {total_params:,}")
         print(f"  Trainable parameters:  {trainable_s1:,} ({trainable_s1/total_params*100:.2f}%) - Only Classifier")
         print(f"  Optimizer:             {str(cfg['training']['optimizer']).upper()} (Momentum: {cfg['training'].get('momentum', 0.9)}, Nesterov: {cfg['training'].get('nesterov', True)}, Weight Decay: {cfg['training'].get('weight_decay', 1e-4)})")
@@ -127,7 +138,7 @@ def main():
 
     if num_classes == 1:
         if ts_enabled:
-            print(f"  Target Smoothing:      ENABLED -> Clear={ts_low:.2f}, Occluded={ts_high:.2f} (Target Logit ≈ [{-3.89:.2f}, {+3.89:.2f}])")
+            print(f"  Target Smoothing:      ENABLED -> Clear={ts_low:.2f}, Occluded={ts_high:.2f} (Target Logit ~ [{-3.89:.2f}, {+3.89:.2f}])")
         if lp_enabled:
             print(f"  Logit Regularizer:     ENABLED -> Max Logit={lp_cfg.get('max_logit', 3.90)}, Margin Weight={lp_cfg.get('margin_weight', 0.05)}, L2 Weight={lp_cfg.get('l2_weight', 0.001)}")
 
@@ -155,7 +166,7 @@ def main():
             remaining_epochs = max(1, total_epochs - stage1_epochs)
 
             print("\n" + "=" * 65)
-            print(f"=== GIAI ĐOẠN 2: DISCRIMINATIVE FINE-TUNING (Epoch {epoch} -> {total_epochs}) ===")
+            print(f"=== STAGE 2: DISCRIMINATIVE FINE-TUNING (Epoch {epoch} -> {total_epochs}) ===")
             print(f"  Frozen layers:         Block 0 -> Block {unfreeze_from_block - 1}")
             print(f"  Unfrozen layers:       Block {unfreeze_from_block} -> Block 17 + Conv 1x1 + Classifier")
             print(f"  Trainable parameters:  {trainable_s2:,} / {total_params:,} ({trainable_s2/total_params*100:.2f}%)")
@@ -246,14 +257,14 @@ def main():
             next_lrs, event = scheduler.step(plateau_val)
             if event == "switched_to_cosine":
                 print(
-                    f"  >>> [PlateauToCosine] Đạt mốc Epoch {epoch} (switch_epoch: {getattr(scheduler, 'switch_epoch', 50)}). "
-                    f"Kích hoạt Phase 2 Cosine Annealing (Epoch {epoch + 1} -> {total_epochs}) để hội tụ sâu!"
+                    f"  >>> [PlateauToCosine] Reached Epoch {epoch} (switch_epoch: {getattr(scheduler, 'switch_epoch', 50)}). "
+                    f"Activated Phase 2 Cosine Annealing (Epoch {epoch + 1} -> {total_epochs}) for deep convergence!"
                 )
             elif event == "reduced_by_factor":
-                phase_name = "Pha 1 Plateau" if getattr(scheduler, 'phase', '') == 'plateau' else "Pha 2 Cosine"
+                phase_name = "Phase 1 Plateau" if getattr(scheduler, 'phase', '') == 'plateau' else "Phase 2 Cosine"
                 print(
-                    f"  >>> [PlateauToCosine] {plateau_monitor} không cải thiện trong {scheduler.patience} epoch ({phase_name}). "
-                    f"Hạ Learning Rate x{scheduler.factor:.2f} lần!"
+                    f"  >>> [PlateauToCosine] {plateau_monitor} did not improve in {scheduler.patience} epochs ({phase_name}). "
+                    f"Reduced Learning Rate by factor {scheduler.factor:.2f}!"
                 )
         elif step_type in ["cosine_plateau", "hybrid"]:
             plateau_cfg = cfg["training"].get("plateau", {})
@@ -263,8 +274,8 @@ def main():
             next_lrs, was_reduced = scheduler.step(plateau_val)
             if was_reduced:
                 print(
-                    f"  >>> [AdaptiveCosinePlateau] {plateau_monitor} chững lại sau {scheduler.patience} epoch. "
-                    f"Thu hẹp LR Scale: {prev_scale:.3f} -> {scheduler.scale:.3f}"
+                    f"  >>> [AdaptiveCosinePlateau] {plateau_monitor} plateaued after {scheduler.patience} epochs. "
+                    f"Reduced LR Scale: {prev_scale:.3f} -> {scheduler.scale:.3f}"
                 )
         elif step_type == "plateau":
             plateau_cfg = cfg["training"].get("plateau", {})
@@ -274,7 +285,7 @@ def main():
             scheduler.step(plateau_val)
             new_lrs = [group["lr"] for group in optimizer.param_groups]
             if any(n_lr < p_lr for n_lr, p_lr in zip(new_lrs, prev_lrs)):
-                print(f"  >>> [ReduceLROnPlateau] {plateau_monitor} chững lại sau {plateau_cfg.get('patience', 8)} epoch. Hạ Learning Rate:")
+                print(f"  >>> [ReduceLROnPlateau] {plateau_monitor} plateaued after {plateau_cfg.get('patience', 8)} epochs. Reducing Learning Rate:")
                 for i, (n_lr, p_lr) in enumerate(zip(new_lrs, prev_lrs)):
                     g_name = optimizer.param_groups[i].get("name", f"group_{i}")
                     print(f"      Group '{g_name}': {p_lr:.6e} -> {n_lr:.6e}")
@@ -312,12 +323,12 @@ def main():
         ):
             print(
                 f"\nEarly stopping triggered at Epoch {epoch:03d}: "
-                f"'{early_stopping.monitor}' không cải thiện trong {early_stopping.patience} epoch."
+                f"'{early_stopping.monitor}' did not improve in {early_stopping.patience} epochs."
             )
             if early_stopping.restore_best_weights:
                 print(
-                    f"  >>> Đã khôi phục weights tốt nhất từ Epoch {early_stopping.best_epoch:03d} "
-                    f"({early_stopping.monitor}: {early_stopping.best_metric:.4f}). Patience được reset về 0."
+                    f"  >>> Restored best weights from Epoch {early_stopping.best_epoch:03d} "
+                    f"({early_stopping.monitor}: {early_stopping.best_metric:.4f}). Patience reset to 0."
                 )
             break
 
