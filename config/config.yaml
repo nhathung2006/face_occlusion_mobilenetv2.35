@@ -35,12 +35,12 @@ training:
     stage2_backbone_lr: 0.0004    # LR nhóm Block 7+ & Conv 1x1
     stage2_classifier_lr: 0.004   # LR nhóm Classifier (gấp 10 lần Backbone LR)
 
-  scheduler: plateau_to_cosine    # 'plateau_to_cosine' (Plateau hội tụ nhanh trước, chững loss chuyển sang Cosine decay)
+  scheduler: plateau              # 'plateau' (ReduceLROnPlateau chuẩn dạng bậc thang)
   plateau:
     monitor: val_loss             # Theo dõi validation loss
     mode: min                     # Giảm khi loss không giảm
-    factor: 0.65                  # Giảm LR 0.65 lần nếu loss tiếp tục chững trong pha Cosine
-    patience: 5                   # Chuyển sang Cosine sau 5 epoch không cải thiện, và hạ LR 0.65 lần sau 5 epoch tiếp theo
+    factor: 0.50                  # Giảm 50% LR mỗi khi kích hoạt
+    patience: 8                   # Giảm LR nếu val_loss chững lại sau 8 epoch
     min_lr: 0.000001              # Tốc độ học nhỏ nhất (1e-6)
     threshold: 0.0005             # Ngưỡng cải thiện tối thiểu
     cooldown: 1                   # Số epoch chờ trước khi bắt đầu đếm patience mới
