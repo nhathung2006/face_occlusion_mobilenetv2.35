@@ -594,3 +594,13 @@ timestamp,filename,old_class,new_class,model_pred,confidence,action
 2026-09-22 17:54:17,0--Parade_0_Parade_Parade_0_633.jpg_b13223.jpg,clear,clear,occluded,0.6762,keep
 2026-09-22 17:54:24,01a0b342-5540-74f2-ab87-f877bfcc0b37_nvr-llWGaUl9M9E771xokkJUiNr5fMyJBigI_1789713863940_img_face11.jpg,clear,clear,occluded,0.6720,keep
 2026-09-22 17:54:26,007052_face.jpg,occluded,occluded,clear,0.6681,keep
+2026-09-23 09:18:47,12--Group_12_Group_Group_12_Group_Group_12_228.jpg_b24585.jpg,occluded,clear,clear,0.8247,relabel
+2026-09-23 09:19:05,12--Group_12_Group_Group_12_Group_Group_12_132.jpg_b32105.jpg,occluded,DELETED,clear,0.6697,delete
+2026-09-23 09:19:13,2--Demonstration_2_Demonstration_Demonstration_Or_Protest_2_59.jpg_b50625.jpg,occluded,DELETED,clear,0.6420,delete
+2026-09-23 09:19:49,12--Group_12_Group_Group_12_Group_Group_12_337.jpg_b32779.jpg,occluded,clear,clear,0.5335,relabel
+2026-09-23 09:19:54,26--Soldier_Drilling_26_Soldier_Drilling_Soldiers_Drilling_26_420.jpg_b92463.jpg,occluded,clear,clear,0.5268,relabel
+2026-09-23 09:20:18,003944_face.jpg,occluded,clear,occluded,0.5735,relabel
+2026-09-23 09:20:20,31--Waiter_Waitress_31_Waiter_Waitress_Waiter_Waitress_31_873.jpg_b99085.jpg,occluded,clear,occluded,0.5703,relabel
+2026-09-23 09:20:25,10--People_Marching_10_People_Marching_People_Marching_2_40.jpg_b4234.jpg,occluded,clear,occluded,0.5597,relabel
+2026-09-23 09:20:26,31--Waiter_Waitress_31_Waiter_Waitress_Waiter_Waitress_31_660.jpg_b98872.jpg,occluded,clear,occluded,0.5570,relabel
+2026-09-23 09:20:36,008352_face.jpg,occluded,clear,occluded,0.5312,relabel
