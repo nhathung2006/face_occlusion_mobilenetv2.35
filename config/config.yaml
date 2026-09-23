@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 1
-  dropout: 0.40
+  dropout: 0.35
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -47,6 +47,11 @@ training:
 
   cosine:
     eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6) khi dùng cosine
+
+  loss_type: focal                # 'focal' (BCE Focal Loss) hoặc 'bce' (BCEWithLogitsLoss)
+  focal:
+    gamma: 1.0                    # Hệ số focusing (gamma = 1.0)
+    alpha: 0.0                    # 0.0 (unweighted alpha)
 
   pos_weight: 1.0                 # Trọng số cho positive class (occluded), 1.0 = cân bằng
   label_smoothing: 0.05
