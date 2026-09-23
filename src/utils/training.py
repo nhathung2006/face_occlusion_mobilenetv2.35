@@ -178,12 +178,14 @@ class WarmupCosinePerGroupScheduler:
 
 class PlateauThenCosineScheduler:
     """
-    Plateau-to-Cosine Transition Scheduler with Secondary Decay:
-    - Phase 1 (Plateau / Fast Convergence): Keeps high learning rate (with initial Warmup)
-      as long as the monitored metric (e.g. val_loss) continues to improve.
-    - Transition: If val_loss does not improve for `patience` (5) epochs, switches to Phase 2 (Cosine Annealing).
-    - Phase 2 (Cosine Annealing + Reactive Decay): LR decays smoothly along the Cosine curve.
-      If val_loss continues not to improve for another `patience` (5) epochs, LR is scaled down by `factor` (0.65x).
+    Plateau-to-Cosine Transition Scheduler:
+    - Phase 1 (Plateau / Epoch 1 -> switch_epoch, default: 50):
+      Acts as ReduceLROnPlateau: If val_loss does not improve for `patience` (8) epochs,
+      reduces LR by `factor` (0.5x).
+    - Transition: At epoch >= switch_epoch (50), automatically transitions to Phase 2 (Cosine Annealing).
+    - Phase 2 (Cosine Annealing + Reactive Decay / Epoch 51 -> total_epochs):
+      LR decays smoothly along the Cosine curve from the current LR to eta_min.
+      If val_loss continues not to improve for another `patience` (8) epochs, LR is scaled down by `factor`.
     """
 
     def __init__(
@@ -192,9 +194,10 @@ class PlateauThenCosineScheduler:
         total_epochs: int,
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
+        switch_epoch: int = 50,
         eta_min: float = 1e-6,
-        patience: int = 5,
-        factor: float = 0.65,
+        patience: int = 8,
+        factor: float = 0.50,
         threshold: float = 0.0005,
         mode: str = "min",
         min_scale: float = 1e-4,
@@ -203,6 +206,7 @@ class PlateauThenCosineScheduler:
         self.total_epochs = max(1, int(total_epochs))
         self.warmup_epochs = max(0, int(warmup_epochs))
         self.warmup_start_factor = float(warmup_start_factor)
+        self.switch_epoch = int(switch_epoch)
         self.eta_min = float(eta_min)
         self.patience = int(patience)
         self.factor = float(factor)
@@ -215,7 +219,7 @@ class PlateauThenCosineScheduler:
         self.base_lrs = [float(group.get("initial_lr", group["lr"])) for group in optimizer.param_groups]
         self.best_metric = float("inf") if self.mode == "min" else float("-inf")
         self.num_bad_epochs = 0
-        self.cosine_start_epoch = 0
+        self.cosine_start_epoch = self.switch_epoch
         self.cosine_start_lrs = list(self.base_lrs)
         self.scale = 1.0
 
@@ -255,33 +259,34 @@ class PlateauThenCosineScheduler:
         """
         Steps the scheduler.
         Returns (current_lrs, event_type) where event_type is:
-          - 'switched_to_cosine' when transitioning from Plateau to Cosine
-          - 'reduced_by_factor' when LR scale is reduced by factor (0.65x)
+          - 'switched_to_cosine' when transitioning from Plateau to Cosine at switch_epoch
+          - 'reduced_by_factor' when LR or LR scale is reduced by factor (0.50x)
           - None otherwise
         """
         self.epoch += 1
         event = None
 
-        if metrics is not None:
-            if self.phase == "plateau" and (self.epoch > self.warmup_epochs):
-                if self._is_better(metrics, self.best_metric):
-                    self.best_metric = metrics
-                    self.num_bad_epochs = 0
-                else:
-                    self.num_bad_epochs += 1
-                    if self.num_bad_epochs >= self.patience:
-                        self.phase = "cosine"
-                        self.cosine_start_epoch = self.epoch
-                        self.cosine_start_lrs = [float(g["lr"]) for g in self.optimizer.param_groups]
+        # Check if reaching switch_epoch to transition to cosine
+        if self.phase == "plateau" and self.epoch >= self.switch_epoch:
+            self.phase = "cosine"
+            self.cosine_start_epoch = self.epoch
+            self.cosine_start_lrs = [float(g["lr"]) for g in self.optimizer.param_groups]
+            self.num_bad_epochs = 0
+            event = "switched_to_cosine"
+        elif metrics is not None:
+            if self._is_better(metrics, self.best_metric):
+                self.best_metric = metrics
+                self.num_bad_epochs = 0
+            else:
+                self.num_bad_epochs += 1
+                if self.num_bad_epochs >= self.patience:
+                    if self.phase == "plateau":
+                        # Reduce base_lrs by factor during plateau phase
+                        self.base_lrs = [max(self.eta_min, lr * self.factor) for lr in self.base_lrs]
                         self.num_bad_epochs = 0
-                        event = "switched_to_cosine"
-            elif self.phase == "cosine":
-                if self._is_better(metrics, self.best_metric):
-                    self.best_metric = metrics
-                    self.num_bad_epochs = 0
-                else:
-                    self.num_bad_epochs += 1
-                    if self.num_bad_epochs >= self.patience:
+                        event = "reduced_by_factor"
+                    elif self.phase == "cosine":
+                        # Reduce cosine scale by factor during cosine phase
                         new_scale = max(self.min_scale, self.scale * self.factor)
                         if new_scale < self.scale:
                             self.scale = new_scale
@@ -416,9 +421,11 @@ def build_scheduler(
     if name in ["plateau_to_cosine", "plateau_then_cosine", "plateau_cosine"]:
         c_cfg = t.get("cosine", {})
         p_cfg = t.get("plateau", {})
+        ptc_cfg = t.get("plateau_to_cosine", {})
+        switch_epoch = int(ptc_cfg.get("switch_epoch", t.get("switch_epoch", 50)))
         eta_min = float(c_cfg.get("eta_min", 1e-6))
-        patience = int(p_cfg.get("patience", 5))
-        factor = float(p_cfg.get("factor", 0.65))
+        patience = int(p_cfg.get("patience", 8))
+        factor = float(p_cfg.get("factor", 0.50))
         threshold = float(p_cfg.get("threshold", 0.0005))
         monitor = str(p_cfg.get("monitor", "val_loss")).lower()
         default_mode = "min" if "loss" in monitor else "max"
@@ -429,6 +436,7 @@ def build_scheduler(
             total_epochs=epochs,
             warmup_epochs=warmup_epochs,
             warmup_start_factor=warmup_start_factor,
+            switch_epoch=switch_epoch,
             eta_min=eta_min,
             patience=patience,
             factor=factor,

@@ -246,13 +246,14 @@ def main():
             next_lrs, event = scheduler.step(plateau_val)
             if event == "switched_to_cosine":
                 print(
-                    f"  >>> [PlateauToCosine] {plateau_monitor} chững lại sau {scheduler.patience} epoch (Phase 1 Plateau hoàn tất). "
+                    f"  >>> [PlateauToCosine] Đạt mốc Epoch {epoch} (switch_epoch: {getattr(scheduler, 'switch_epoch', 50)}). "
                     f"Kích hoạt Phase 2 Cosine Annealing (Epoch {epoch + 1} -> {total_epochs}) để hội tụ sâu!"
                 )
             elif event == "reduced_by_factor":
+                phase_name = "Pha 1 Plateau" if getattr(scheduler, 'phase', '') == 'plateau' else "Pha 2 Cosine"
                 print(
-                    f"  >>> [PlateauToCosine] {plateau_monitor} tiếp tục không cải thiện trong {scheduler.patience} epoch (trong Pha Cosine). "
-                    f"Giảm Learning Rate x{scheduler.factor:.2f} lần (Scale: {scheduler.scale:.4f})!"
+                    f"  >>> [PlateauToCosine] {plateau_monitor} không cải thiện trong {scheduler.patience} epoch ({phase_name}). "
+                    f"Hạ Learning Rate x{scheduler.factor:.2f} lần!"
                 )
         elif step_type in ["cosine_plateau", "hybrid"]:
             plateau_cfg = cfg["training"].get("plateau", {})
