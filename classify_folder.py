@@ -91,6 +91,7 @@ def classify_and_organize(
     action: str = "copy",
     make_contact_sheets: bool = True,
     batch_size: int | None = None,
+    use_tta: bool = False,
 ) -> None:
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
@@ -100,6 +101,7 @@ def classify_and_organize(
     cfg = load_config(config_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Test-Time Augmentation (TTA): {'ENABLED (2-pass Horizontal Flip)' if use_tta else 'DISABLED'}")
 
     class_names = list(cfg["data"]["class_names"])
     bs = batch_size or int(cfg["data"].get("batch_size", 64))
@@ -160,7 +162,13 @@ def classify_and_organize(
                 continue
 
             inputs = torch.stack(batch_tensors).to(device)
-            logits = model(inputs)
+            if use_tta:
+                inputs_flipped = torch.flip(inputs, dims=[3])
+                logits_orig = model(inputs)
+                logits_flip = model(inputs_flipped)
+                logits = (logits_orig + logits_flip) * 0.5
+            else:
+                logits = model(inputs)
             num_classes = int(cfg["model"].get("num_classes", 1))
             if num_classes == 1:
                 logits_1d = logits.view(-1)
@@ -284,7 +292,23 @@ def main():
         default=64,
         help="Batch size for inference",
     )
+    parser.add_argument(
+        "--tta",
+        dest="tta",
+        action="store_true",
+        default=None,
+        help="Enable 2-pass horizontal flip Test-Time Augmentation (TTA)",
+    )
+    parser.add_argument(
+        "--no-tta",
+        dest="tta",
+        action="store_false",
+        help="Disable Test-Time Augmentation (TTA)",
+    )
     args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    use_tta = args.tta if args.tta is not None else bool(cfg.get("evaluation", {}).get("use_tta", False))
 
     classify_and_organize(
         input_dir=Path(args.input_dir),
@@ -295,6 +319,7 @@ def main():
         action=args.action,
         make_contact_sheets=not args.no_sheets,
         batch_size=args.batch_size,
+        use_tta=use_tta,
     )
 
 

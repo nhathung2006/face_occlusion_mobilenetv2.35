@@ -10,6 +10,7 @@ import torch
 from tqdm import tqdm
 
 from src.evaluation.metrics import compute_metrics
+from src.training.losses import apply_target_smoothing
 from src.utils.training import save_checkpoint
 
 
@@ -126,11 +127,15 @@ def run_epoch(
     optimizer=None,
     lr_scheduler=None,
     label_smoothing: float = 0.0,
+    target_smoothing_enabled: bool = False,
+    target_low: float = 0.02,
+    target_high: float = 0.98,
 ):
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
     y_true, y_pred = [], []
+    all_logits, all_probs = [], []
 
     for images, targets in tqdm(loader, leave=False):
         images = images.to(device, non_blocking=True)
@@ -144,13 +149,18 @@ def run_epoch(
             if num_classes == 1:
                 logits = logits.view(-1)
                 targets_float = targets.float()
-                if training and label_smoothing > 0.0:
+                if training and target_smoothing_enabled:
+                    targets_loss = apply_target_smoothing(targets_float, target_low, target_high)
+                elif training and label_smoothing > 0.0:
                     targets_loss = targets_float * (1.0 - label_smoothing) + 0.5 * label_smoothing
                 else:
                     targets_loss = targets_float
                 loss = criterion(logits, targets_loss)
                 probs = torch.sigmoid(logits)
                 preds = (probs >= 0.5).long()
+
+                all_logits.extend(logits.detach().cpu().tolist())
+                all_probs.extend(probs.detach().cpu().tolist())
             else:
                 loss = criterion(logits, targets)
                 preds = logits.argmax(dim=1)
@@ -166,7 +176,13 @@ def run_epoch(
         y_pred.extend(preds.detach().cpu().tolist())
 
     eval_num_classes = 2 if num_classes == 1 else num_classes
-    metrics = compute_metrics(y_true, y_pred, num_classes=eval_num_classes)
+    metrics = compute_metrics(
+        y_true,
+        y_pred,
+        num_classes=eval_num_classes,
+        logits=all_logits if num_classes == 1 else None,
+        probs=all_probs if num_classes == 1 else None,
+    )
     return total_loss / len(loader.dataset), metrics
 
 

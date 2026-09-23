@@ -23,7 +23,7 @@ training:
   optimizer: sgd
   momentum: 0.90
   nesterov: true
-  weight_decay: 0.0005
+  weight_decay: 0.0003
 
   two_stage:
     enabled: true
@@ -35,12 +35,12 @@ training:
     stage2_backbone_lr: 0.0004    # LR nhóm Block 7+ & Conv 1x1
     stage2_classifier_lr: 0.004   # LR nhóm Classifier (gấp 10 lần Backbone LR)
 
-  scheduler: plateau
+  scheduler: plateau_to_cosine    # 'plateau_to_cosine' (Plateau hội tụ nhanh trước, chững loss chuyển sang Cosine decay)
   plateau:
     monitor: val_loss             # Theo dõi validation loss
     mode: min                     # Giảm khi loss không giảm
-    factor: 0.5                   # Giảm 50% LR mỗi khi kích hoạt
-    patience: 8                   # Giảm LR nếu val_loss chững lại sau 8 epoch
+    factor: 0.65                  # Giảm LR 0.65 lần nếu loss tiếp tục chững trong pha Cosine
+    patience: 5                   # Chuyển sang Cosine sau 5 epoch không cải thiện, và hạ LR 0.65 lần sau 5 epoch tiếp theo
     min_lr: 0.000001              # Tốc độ học nhỏ nhất (1e-6)
     threshold: 0.0005             # Ngưỡng cải thiện tối thiểu
     cooldown: 1                   # Số epoch chờ trước khi bắt đầu đếm patience mới
@@ -54,7 +54,19 @@ training:
     alpha: 0.0                    # 0.0 (unweighted alpha)
 
   pos_weight: 1.0                 # Trọng số cho positive class (occluded), 1.0 = cân bằng
-  label_smoothing: 0.05
+  label_smoothing: 0.00           # Tự động thay thế bằng target_smoothing nếu target_smoothing bật
+
+  target_smoothing:
+    enabled: true                 # Bật làm mềm nhãn sang [0.02, 0.98] để kẹp khoảng xác suất Sigmoid
+    target_low: 0.02              # Nhãn Clear = 0.02 (Logit tối ưu ≈ -3.89)
+    target_high: 0.98             # Nhãn Occluded = 0.98 (Logit tối ưu ≈ +3.89)
+
+  logit_penalty:
+    enabled: true                 # Bật hàm phạt biên độ logit (chống nổ logit, tối ưu hóa Quantize INT8)
+    max_logit: 3.90               # Ngưỡng logit an toàn (|logit| <= 3.90 tương ứng p in [0.02, 0.98])
+    margin_weight: 0.05           # Phạt khi logit vượt quá +/- 3.90 (Relu(|logit| - 3.9)^2)
+    l2_weight: 0.001              # Phạt L2 toàn dải logit để giữ phân bố co cụm đẹp cho INT8
+
   early_stopping:
     enabled: true
     patience: 16                  # Dừng training sau 16 epoch không cải thiện val_loss
@@ -85,6 +97,8 @@ evaluation:
   enabled: true
   split: val
   misclassified_dir: outputs/misclassified_val
+  use_tta: false                  # Bật/tắt Test-Time Augmentation (2-pass Horizontal Flip) khi test/eval
 
 inference:
   confidence_threshold: 0.4
+  use_tta: false                  # Tùy chọn TTA khi inference
