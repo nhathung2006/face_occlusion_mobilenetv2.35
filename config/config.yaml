@@ -85,6 +85,8 @@ evaluation:
   enabled: true
   split: val
   misclassified_dir: outputs/misclassified_val
+  use_tta: false                  # Bật/tắt Test-Time Augmentation (2-pass Horizontal Flip) khi test/eval
 
 inference:
   confidence_threshold: 0.4
+  use_tta: false                  # Tùy chọn TTA khi inference
