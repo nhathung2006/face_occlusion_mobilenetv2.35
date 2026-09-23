@@ -26,6 +26,7 @@ from PIL import Image
 from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score
 
 from src.datasets.dataset import build_loaders, build_transforms
+from src.training.losses import build_loss_criterion
 from src.utils.config import load_config
 from src.utils.model import build_model
 
@@ -130,7 +131,7 @@ def evaluate_dataset_dir(cfg: dict, checkpoint_path: Path, dataset_dir: Path, ou
     misclassified = []
     sample_offset = 0
     num_classes = int(cfg["model"].get("num_classes", 1))
-    criterion = torch.nn.BCEWithLogitsLoss() if num_classes == 1 else torch.nn.CrossEntropyLoss()
+    criterion = build_loss_criterion(cfg, device)
     total_loss = 0.0
 
     start_time = time.time()

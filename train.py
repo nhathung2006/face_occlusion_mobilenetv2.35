@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 from src.datasets.dataset import build_loaders
+from src.training.losses import build_loss_criterion
 from src.training.trainer import EarlyStopping, plot_history, run_epoch, save_history
 from src.utils.config import load_config
 from src.utils.model import (
@@ -106,12 +107,15 @@ def main():
         )
 
     label_smoothing = float(cfg["training"].get("label_smoothing", 0.05))
-    pos_weight_val = float(cfg["training"].get("pos_weight", 1.0))
-    if num_classes == 1:
-        pos_weight = torch.tensor([pos_weight_val], device=device) if pos_weight_val != 1.0 else None
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = build_loss_criterion(cfg, device)
+    loss_type_name = str(cfg["training"].get("loss_type", "focal")).upper()
+    if num_classes == 1 and "FOCAL" in loss_type_name:
+        f_cfg = cfg["training"].get("focal", {})
+        print(f"  Loss Function:         BCE Focal Loss (gamma: {f_cfg.get('gamma', 1.0)}, alpha: {f_cfg.get('alpha', 0.0)}, label_smoothing: {label_smoothing})")
+    elif num_classes == 1:
+        print(f"  Loss Function:         BCEWithLogitsLoss (pos_weight: {cfg['training'].get('pos_weight', 1.0)}, label_smoothing: {label_smoothing})")
     else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        print(f"  Loss Function:         CrossEntropyLoss (label_smoothing: {label_smoothing})")
 
     es_cfg = cfg["training"].get("early_stopping", {})
     early_stopping = EarlyStopping(
@@ -212,7 +216,33 @@ def main():
         }
         history.append(row)
 
-        if step_type == "plateau":
+        if step_type in ["plateau_to_cosine", "plateau_then_cosine"]:
+            plateau_cfg = cfg["training"].get("plateau", {})
+            plateau_monitor = str(plateau_cfg.get("monitor", "val_loss"))
+            plateau_val = float(row.get(plateau_monitor, val_loss))
+            next_lrs, event = scheduler.step(plateau_val)
+            if event == "switched_to_cosine":
+                print(
+                    f"  >>> [PlateauToCosine] {plateau_monitor} chững lại sau {scheduler.patience} epoch (Phase 1 Plateau hoàn tất). "
+                    f"Kích hoạt Phase 2 Cosine Annealing (Epoch {epoch + 1} -> {total_epochs}) để hội tụ sâu!"
+                )
+            elif event == "reduced_by_factor":
+                print(
+                    f"  >>> [PlateauToCosine] {plateau_monitor} tiếp tục không cải thiện trong {scheduler.patience} epoch (trong Pha Cosine). "
+                    f"Giảm Learning Rate x{scheduler.factor:.2f} lần (Scale: {scheduler.scale:.4f})!"
+                )
+        elif step_type in ["cosine_plateau", "hybrid"]:
+            plateau_cfg = cfg["training"].get("plateau", {})
+            plateau_monitor = str(plateau_cfg.get("monitor", "val_loss"))
+            plateau_val = float(row.get(plateau_monitor, val_loss))
+            prev_scale = scheduler.scale
+            next_lrs, was_reduced = scheduler.step(plateau_val)
+            if was_reduced:
+                print(
+                    f"  >>> [AdaptiveCosinePlateau] {plateau_monitor} chững lại sau {scheduler.patience} epoch. "
+                    f"Thu hẹp LR Scale: {prev_scale:.3f} -> {scheduler.scale:.3f}"
+                )
+        elif step_type == "plateau":
             plateau_cfg = cfg["training"].get("plateau", {})
             plateau_monitor = str(plateau_cfg.get("monitor", "val_loss"))
             plateau_val = float(row.get(plateau_monitor, val_loss))
