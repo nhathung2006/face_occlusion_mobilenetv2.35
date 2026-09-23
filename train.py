@@ -107,15 +107,29 @@ def main():
         )
 
     label_smoothing = float(cfg["training"].get("label_smoothing", 0.05))
+    ts_cfg = cfg["training"].get("target_smoothing", {})
+    ts_enabled = bool(ts_cfg.get("enabled", False))
+    ts_low = float(ts_cfg.get("target_low", 0.02))
+    ts_high = float(ts_cfg.get("target_high", 0.98))
+
+    lp_cfg = cfg["training"].get("logit_penalty", {})
+    lp_enabled = bool(lp_cfg.get("enabled", False))
+
     criterion = build_loss_criterion(cfg, device)
     loss_type_name = str(cfg["training"].get("loss_type", "focal")).upper()
     if num_classes == 1 and "FOCAL" in loss_type_name:
         f_cfg = cfg["training"].get("focal", {})
-        print(f"  Loss Function:         BCE Focal Loss (gamma: {f_cfg.get('gamma', 1.0)}, alpha: {f_cfg.get('alpha', 0.0)}, label_smoothing: {label_smoothing})")
+        print(f"  Loss Function:         BCE Focal Loss (gamma: {f_cfg.get('gamma', 1.0)}, alpha: {f_cfg.get('alpha', 0.0)})")
     elif num_classes == 1:
-        print(f"  Loss Function:         BCEWithLogitsLoss (pos_weight: {cfg['training'].get('pos_weight', 1.0)}, label_smoothing: {label_smoothing})")
+        print(f"  Loss Function:         BCEWithLogitsLoss (pos_weight: {cfg['training'].get('pos_weight', 1.0)})")
     else:
         print(f"  Loss Function:         CrossEntropyLoss (label_smoothing: {label_smoothing})")
+
+    if num_classes == 1:
+        if ts_enabled:
+            print(f"  Target Smoothing:      ENABLED -> Clear={ts_low:.2f}, Occluded={ts_high:.2f} (Target Logit ≈ [{-3.89:.2f}, {+3.89:.2f}])")
+        if lp_enabled:
+            print(f"  Logit Regularizer:     ENABLED -> Max Logit={lp_cfg.get('max_logit', 3.90)}, Margin Weight={lp_cfg.get('margin_weight', 0.05)}, L2 Weight={lp_cfg.get('l2_weight', 0.001)}")
 
     es_cfg = cfg["training"].get("early_stopping", {})
     early_stopping = EarlyStopping(
@@ -173,6 +187,9 @@ def main():
             optimizer,
             batch_scheduler,
             label_smoothing=label_smoothing,
+            target_smoothing_enabled=ts_enabled,
+            target_low=ts_low,
+            target_high=ts_high,
         )
         with torch.no_grad():
             val_loss, val_m = run_epoch(
@@ -182,6 +199,7 @@ def main():
                 device,
                 num_classes,
                 label_smoothing=0.0,
+                target_smoothing_enabled=False,
             )
 
         # Extract per-group learning rates safely by group name or index
@@ -214,6 +232,11 @@ def main():
             "train_f1": train_m.f1,
             "val_f1": val_m.f1,
         }
+        if val_m.logit_min is not None:
+            row["val_logit_min"] = val_m.logit_min
+            row["val_logit_max"] = val_m.logit_max
+            row["val_prob_min"] = val_m.prob_min
+            row["val_prob_max"] = val_m.prob_max
         history.append(row)
 
         if step_type in ["plateau_to_cosine", "plateau_then_cosine"]:

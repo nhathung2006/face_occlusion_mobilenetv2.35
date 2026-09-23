@@ -54,7 +54,19 @@ training:
     alpha: 0.0                    # 0.0 (unweighted alpha)
 
   pos_weight: 1.0                 # Trọng số cho positive class (occluded), 1.0 = cân bằng
-  label_smoothing: 0.05
+  label_smoothing: 0.00           # Tự động thay thế bằng target_smoothing nếu target_smoothing bật
+
+  target_smoothing:
+    enabled: true                 # Bật làm mềm nhãn sang [0.02, 0.98] để kẹp khoảng xác suất Sigmoid
+    target_low: 0.02              # Nhãn Clear = 0.02 (Logit tối ưu ≈ -3.89)
+    target_high: 0.98             # Nhãn Occluded = 0.98 (Logit tối ưu ≈ +3.89)
+
+  logit_penalty:
+    enabled: true                 # Bật hàm phạt biên độ logit (chống nổ logit, tối ưu hóa Quantize INT8)
+    max_logit: 3.90               # Ngưỡng logit an toàn (|logit| <= 3.90 tương ứng p in [0.02, 0.98])
+    margin_weight: 0.05           # Phạt khi logit vượt quá +/- 3.90 (Relu(|logit| - 3.9)^2)
+    l2_weight: 0.001              # Phạt L2 toàn dải logit để giữ phân bố co cụm đẹp cho INT8
+
   early_stopping:
     enabled: true
     patience: 16                  # Dừng training sau 16 epoch không cải thiện val_loss

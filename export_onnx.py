@@ -3,6 +3,19 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import sys
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import torch
 
 from src.utils.config import load_config
@@ -43,7 +56,7 @@ def main():
     )
 
     try:
-        torch.onnx.export(model, dummy, onnx_path, dynamo=True, **kwargs)
+        torch.onnx.export(model, dummy, onnx_path, dynamo=False, **kwargs)
     except TypeError:
         torch.onnx.export(model, dummy, onnx_path, **kwargs)
 

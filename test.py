@@ -136,6 +136,7 @@ def evaluate_dataset_dir(
     model.eval()
 
     y_true, y_pred = [], []
+    all_logits, all_probs = [], []
     misclassified = []
     sample_offset = 0
     num_classes = int(cfg["model"].get("num_classes", 1))
@@ -162,6 +163,8 @@ def evaluate_dataset_dir(
                 probs_occ = torch.sigmoid(logits_1d).cpu()
                 preds = (probs_occ >= 0.5).long()
                 confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
+                all_logits.extend(logits_1d.cpu().tolist())
+                all_probs.extend(probs_occ.tolist())
             else:
                 loss = criterion(logits, targets_device)
                 probs = torch.softmax(logits, dim=1).cpu()
@@ -220,6 +223,10 @@ def evaluate_dataset_dir(
     print(f"Macro Recall:        {macro_recall * 100:.2f}%")
     print(f"Macro F1-Score:      {macro_f1 * 100:.2f}%")
     print(f"Misclassified Total: {len(misclassified)} / {len(y_true)} ({len(misclassified)/len(y_true)*100:.2f}%)")
+    if all_logits:
+        import numpy as np
+        print(f"Logits Range:        [{np.min(all_logits):.3f}, {np.max(all_logits):.3f}] (Mean: {np.mean(all_logits):.3f}, Std: {np.std(all_logits):.3f})")
+        print(f"Sigmoid Prob Range:  [{np.min(all_probs):.4f}, {np.max(all_probs):.4f}] (Mean: {np.mean(all_probs):.4f})")
     print("-" * 65)
     print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
     print("=" * 65)
