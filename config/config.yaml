@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 1
-  dropout: 0.35
+  dropout: 0.3
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
