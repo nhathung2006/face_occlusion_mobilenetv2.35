@@ -50,7 +50,7 @@ training:
   cosine:
     eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6) khi dùng cosine
 
-  loss_type: focal                # 'focal' (BCE Focal Loss) hoặc 'bce' (BCEWithLogitsLoss)
+  loss_type: bce                   # BCEWithLogitsLoss nhận raw logits; sigmoid nằm bên trong loss
   focal:
     gamma: 1.0                    # Hệ số focusing (gamma = 1.0)
     alpha: 0.0                    # 0.0 (unweighted alpha)
@@ -65,9 +65,9 @@ training:
 
   logit_penalty:
     enabled: true                 # Bật hàm phạt biên độ logit (chống nổ logit, tối ưu hóa Quantize INT8)
-    max_logit: 3.90               # Ngưỡng logit an toàn (|logit| <= 3.90 tương ứng p in [0.02, 0.98])
+    max_logit: 3.8918203           # logit(0.98), tương ứng sigmoid trong khoảng [0.02, 0.98]
     margin_weight: 0.05           # Phạt khi logit vượt quá +/- 3.90 (Relu(|logit| - 3.9)^2)
-    l2_weight: 0.001              # Phạt L2 toàn dải logit để giữ phân bố co cụm đẹp cho INT8
+    l2_weight: 0.0                # Tắt L2 để không kéo logits về 0 (sigmoid=0.5)
 
   early_stopping:
     enabled: true

@@ -3,7 +3,8 @@ from __future__ import annotations
 import numpy as np
 import onnxruntime as ort
 from PIL import Image
-from torchvision import transforms
+
+from src.datasets.dataset import build_eval_transform
 
 
 class ONNXFaceOcclusionClassifier:
@@ -14,11 +15,7 @@ class ONNXFaceOcclusionClassifier:
         self.image_size = int(image_size)
         self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
-        self.transform = transforms.Compose([
-            transforms.Resize((self.image_size, self.image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
+        self.transform = build_eval_transform(self.image_size)
 
     def _preprocess_one(self, image):
         if isinstance(image, np.ndarray):

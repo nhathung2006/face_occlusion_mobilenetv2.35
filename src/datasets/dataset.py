@@ -6,6 +6,7 @@ from typing import Callable
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.transforms import InterpolationMode
 
 
 class AddGaussianNoise:
@@ -18,12 +19,32 @@ class AddGaussianNoise:
         return torch.clamp(tensor + torch.randn_like(tensor) * self.std, 0.0, 1.0)
 
 
+def build_eval_transform(image_size: int):
+    """Preprocessing shared by validation and ONNX inference."""
+    return transforms.Compose([
+        transforms.Resize(
+            (int(image_size), int(image_size)),
+            interpolation=InterpolationMode.BILINEAR,
+            antialias=True,
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        ),
+    ])
+
+
 def build_transforms(cfg: dict):
     image_size = int(cfg["data"]["image_size"])
     aug = cfg["augmentation"]
 
     train_ops: list[Callable] = [
-        transforms.Resize((image_size, image_size)),
+        transforms.Resize(
+            (image_size, image_size),
+            interpolation=InterpolationMode.BILINEAR,
+            antialias=True,
+        ),
         transforms.RandomHorizontalFlip(p=float(aug["horizontal_flip"])),
         transforms.RandomRotation(float(aug["rotation_degrees"])),
         transforms.ColorJitter(
@@ -40,16 +61,7 @@ def build_transforms(cfg: dict):
         ),
     ]
 
-    eval_ops = [
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ]
-
-    return transforms.Compose(train_ops), transforms.Compose(eval_ops)
+    return transforms.Compose(train_ops), build_eval_transform(image_size)
 
 
 def build_datasets(cfg: dict):

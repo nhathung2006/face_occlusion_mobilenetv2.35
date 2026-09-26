@@ -127,7 +127,7 @@ def main():
     lp_enabled = bool(lp_cfg.get("enabled", False))
 
     criterion = build_loss_criterion(cfg, device)
-    loss_type_name = str(cfg["training"].get("loss_type", "focal")).upper()
+    loss_type_name = str(cfg["training"].get("loss_type", "bce")).upper()
     if num_classes == 1 and "FOCAL" in loss_type_name:
         f_cfg = cfg["training"].get("focal", {})
         print(f"  Loss Function:         BCE Focal Loss (gamma: {f_cfg.get('gamma', 1.0)}, alpha: {f_cfg.get('alpha', 0.0)})")
@@ -189,7 +189,7 @@ def main():
             early_stopping.reset_patience()
 
         batch_scheduler = scheduler if step_type == "batch" else None
-        train_loss, train_m = run_epoch(
+        train_loss, train_m, train_details = run_epoch(
             model,
             train_loader,
             criterion,
@@ -201,16 +201,20 @@ def main():
             target_smoothing_enabled=ts_enabled,
             target_low=ts_low,
             target_high=ts_high,
+            return_details=True,
         )
         with torch.no_grad():
-            val_loss, val_m = run_epoch(
+            val_loss, val_m, val_details = run_epoch(
                 model,
                 val_loader,
                 criterion,
                 device,
                 num_classes,
                 label_smoothing=0.0,
-                target_smoothing_enabled=False,
+                target_smoothing_enabled=ts_enabled,
+                target_low=ts_low,
+                target_high=ts_high,
+                return_details=True,
             )
 
         # Extract per-group learning rates safely by group name or index
@@ -234,6 +238,12 @@ def main():
             "classifier_lr": clf_lr,
             "train_loss": train_loss,
             "val_loss": val_loss,
+            "train_classification_loss": train_details["classification_loss"],
+            "train_logit_penalty": train_details["logit_penalty"],
+            "val_classification_loss": val_details["classification_loss"],
+            "val_logit_penalty": val_details["logit_penalty"],
+            "val_max_abs_logit": val_details["max_abs_logit"],
+            "val_out_of_range_ratio": val_details["out_of_range_ratio"],
             "train_accuracy": train_m.accuracy,
             "val_accuracy": val_m.accuracy,
             "train_precision": train_m.precision,
@@ -295,8 +305,10 @@ def main():
         lr_str = f"LR(BB: {bb_lr:.6f}, Clf: {clf_lr:.6f})" if len(optimizer.param_groups) > 1 else f"LR: {clf_lr:.6f}"
         print(
             f"Epoch {epoch:03d}/{total_epochs:03d} [{stage_tag}] | "
-            f"Train [Loss: {train_loss:.4f}, Acc: {train_m.accuracy:.4f}, Prec: {train_m.precision:.4f}, Rec: {train_m.recall:.4f}, F1: {train_m.f1:.4f}] | "
-            f"Val [Loss: {val_loss:.4f}, Acc: {val_m.accuracy:.4f}, Prec: {val_m.precision:.4f}, Rec: {val_m.recall:.4f}, F1: {val_m.f1:.4f}] | "
+            f"Train [Loss: {train_loss:.4f}, BCE: {train_details['classification_loss']:.4f}, Penalty: {train_details['logit_penalty']:.4f}, "
+            f"Acc: {train_m.accuracy:.4f}, Prec: {train_m.precision:.4f}, Rec: {train_m.recall:.4f}, F1: {train_m.f1:.4f}] | "
+            f"Val [Loss: {val_loss:.4f}, Penalty: {val_details['logit_penalty']:.4f}, "
+            f"Acc: {val_m.accuracy:.4f}, Prec: {val_m.precision:.4f}, Rec: {val_m.recall:.4f}, F1: {val_m.f1:.4f}] | "
             f"{lr_str}"
         )
 

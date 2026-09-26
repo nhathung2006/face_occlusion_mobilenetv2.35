@@ -11,7 +11,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from src.evaluation.metrics import compute_metrics
-from src.training.losses import apply_target_smoothing
+from src.training.losses import LossWithLogitPenalty, apply_target_smoothing
 from src.utils.training import save_checkpoint
 
 
@@ -143,14 +143,21 @@ def run_epoch(
     target_smoothing_enabled: bool = False,
     target_low: float = 0.02,
     target_high: float = 0.98,
+    return_details: bool = False,
 ):
     training = optimizer is not None
     model.train(training)
+    criterion.train(training)
     if training:
         # model.train() also switches frozen backbone BatchNorm layers to train mode.
         # Put them back in eval mode so running_mean/running_var stay at pretrained values.
         _set_frozen_batchnorm_eval(model)
     total_loss = 0.0
+    classification_loss_total = 0.0
+    logit_penalty_total = 0.0
+    max_abs_logit = 0.0
+    out_of_range_count = 0
+    logit_count = 0
     y_true, y_pred = [], []
     all_logits, all_probs = [], []
 
@@ -166,13 +173,28 @@ def run_epoch(
             if num_classes == 1:
                 logits = logits.view(-1)
                 targets_float = targets.float()
-                if training and target_smoothing_enabled:
+                if target_smoothing_enabled:
                     targets_loss = apply_target_smoothing(targets_float, target_low, target_high)
                 elif training and label_smoothing > 0.0:
                     targets_loss = targets_float * (1.0 - label_smoothing) + 0.5 * label_smoothing
                 else:
                     targets_loss = targets_float
-                loss = criterion(logits, targets_loss)
+                if isinstance(criterion, LossWithLogitPenalty):
+                    classification_loss = criterion.base_criterion(logits, targets_loss)
+                    penalty_loss, _ = criterion.penalty_criterion(logits)
+                    loss = classification_loss + penalty_loss if training else classification_loss
+                    if criterion.penalty_criterion.enabled:
+                        limit = criterion.penalty_criterion.max_logit
+                        out_of_range_count += int((logits.detach().abs() > limit).sum().item())
+                    logit_penalty_total += penalty_loss.detach().item() * images.size(0)
+                else:
+                    classification_loss = criterion(logits, targets_loss)
+                    loss = classification_loss
+
+                classification_loss_total += classification_loss.detach().item() * images.size(0)
+                batch_max_abs_logit = float(logits.detach().abs().max().item())
+                max_abs_logit = max(max_abs_logit, batch_max_abs_logit)
+                logit_count += logits.numel()
                 probs = torch.sigmoid(logits)
                 preds = (probs >= 0.5).long()
 
@@ -180,6 +202,7 @@ def run_epoch(
                 all_probs.extend(probs.detach().cpu().tolist())
             else:
                 loss = criterion(logits, targets)
+                classification_loss_total += loss.detach().item() * images.size(0)
                 preds = logits.argmax(dim=1)
 
             if training:
@@ -200,7 +223,16 @@ def run_epoch(
         logits=all_logits if num_classes == 1 else None,
         probs=all_probs if num_classes == 1 else None,
     )
-    return total_loss / len(loader.dataset), metrics
+    average_loss = total_loss / len(loader.dataset)
+    details = {
+        "classification_loss": classification_loss_total / len(loader.dataset),
+        "logit_penalty": logit_penalty_total / len(loader.dataset),
+        "max_abs_logit": max_abs_logit if logit_count else None,
+        "out_of_range_ratio": out_of_range_count / logit_count if logit_count else None,
+    }
+    if return_details:
+        return average_loss, metrics, details
+    return average_loss, metrics
 
 
 def save_history(history, path: Path) -> None:

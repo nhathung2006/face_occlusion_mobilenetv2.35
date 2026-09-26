@@ -110,6 +110,8 @@ Output:
 
 The export keeps a dynamic batch dimension so the later detector pipeline can classify multiple face crops in one inference call.
 
+By default, export uses `checkpoints/last.pth`; pass `--checkpoint` to select another checkpoint. The ONNX input is `images` in NCHW format after RGB resize and ImageNet normalization. The output is raw `logits` (no sigmoid), clamped to `[-3.8918203, 3.8918203]`. Apply sigmoid outside ONNX only when a probability is needed.
+
 ## Single-image ONNX inference
 
 ```bash

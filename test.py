@@ -26,7 +26,7 @@ from PIL import Image
 from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score
 
 from src.datasets.dataset import build_loaders, build_transforms
-from src.training.losses import build_loss_criterion
+from src.training.losses import apply_target_smoothing, build_loss_criterion
 from src.utils.config import load_config
 from src.utils.model import build_model
 
@@ -141,6 +141,11 @@ def evaluate_dataset_dir(
     sample_offset = 0
     num_classes = int(cfg["model"].get("num_classes", 1))
     criterion = build_loss_criterion(cfg, device)
+    criterion.eval()
+    target_smoothing_cfg = cfg.get("training", {}).get("target_smoothing", {})
+    target_smoothing_enabled = bool(target_smoothing_cfg.get("enabled", False))
+    target_low = float(target_smoothing_cfg.get("target_low", 0.02))
+    target_high = float(target_smoothing_cfg.get("target_high", 0.98))
     total_loss = 0.0
 
     start_time = time.time()
@@ -159,7 +164,10 @@ def evaluate_dataset_dir(
 
             if num_classes == 1:
                 logits_1d = logits.view(-1)
-                loss = criterion(logits_1d, targets_device.float())
+                loss_targets = targets_device.float()
+                if target_smoothing_enabled:
+                    loss_targets = apply_target_smoothing(loss_targets, target_low, target_high)
+                loss = criterion(logits_1d, loss_targets)
                 probs_occ = torch.sigmoid(logits_1d).cpu()
                 preds = (probs_occ >= 0.5).long()
                 confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
