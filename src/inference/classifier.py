@@ -10,9 +10,20 @@ from src.datasets.dataset import build_eval_transform
 class ONNXFaceOcclusionClassifier:
     """Small wrapper intended for later RTSP -> detector -> classifier pipeline."""
 
-    def __init__(self, onnx_path: str, image_size: int = 112, class_names=None):
+    def __init__(
+        self,
+        onnx_path: str,
+        image_size: int = 112,
+        class_names=None,
+        occluded_threshold: float = 0.4,
+    ):
         self.class_names = list(class_names or ["clear", "occluded"])
         self.image_size = int(image_size)
+        self.occluded_threshold = float(occluded_threshold)
+        if not 0.0 <= self.occluded_threshold <= 1.0:
+            raise ValueError(
+                f"occluded_threshold must be in [0, 1], got {self.occluded_threshold}"
+            )
         self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
         self.transform = build_eval_transform(self.image_size)
@@ -32,7 +43,7 @@ class ONNXFaceOcclusionClassifier:
         if logits.ndim == 1 or (logits.ndim == 2 and logits.shape[1] == 1):
             logits_1d = logits.reshape(-1)
             probs_occ = 1.0 / (1.0 + np.exp(-logits_1d))
-            indices = (probs_occ >= 0.5).astype(int)
+            indices = (probs_occ >= self.occluded_threshold).astype(int)
             confidences = np.where(indices == 1, probs_occ, 1.0 - probs_occ)
             return [
                 {

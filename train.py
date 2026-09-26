@@ -122,6 +122,9 @@ def main():
     ts_enabled = bool(ts_cfg.get("enabled", False))
     ts_low = float(ts_cfg.get("target_low", 0.02))
     ts_high = float(ts_cfg.get("target_high", 0.98))
+    occluded_threshold = float(cfg.get("inference", {}).get("occluded_threshold", 0.5))
+    if not 0.0 <= occluded_threshold <= 1.0:
+        raise ValueError(f"inference.occluded_threshold must be in [0, 1], got {occluded_threshold}")
 
     lp_cfg = cfg["training"].get("logit_penalty", {})
     lp_enabled = bool(lp_cfg.get("enabled", False))
@@ -137,6 +140,7 @@ def main():
         print(f"  Loss Function:         CrossEntropyLoss (label_smoothing: {label_smoothing})")
 
     if num_classes == 1:
+        print(f"  Occluded Threshold:   {occluded_threshold:.2f}")
         if ts_enabled:
             print(f"  Target Smoothing:      ENABLED -> Clear={ts_low:.2f}, Occluded={ts_high:.2f} (Target Logit ~ [{-3.89:.2f}, {+3.89:.2f}])")
         if lp_enabled:
@@ -201,6 +205,7 @@ def main():
             target_smoothing_enabled=ts_enabled,
             target_low=ts_low,
             target_high=ts_high,
+            positive_threshold=occluded_threshold,
             return_details=True,
         )
         with torch.no_grad():
@@ -214,6 +219,7 @@ def main():
                 target_smoothing_enabled=ts_enabled,
                 target_low=ts_low,
                 target_high=ts_high,
+                positive_threshold=occluded_threshold,
                 return_details=True,
             )
 

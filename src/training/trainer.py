@@ -143,8 +143,11 @@ def run_epoch(
     target_smoothing_enabled: bool = False,
     target_low: float = 0.02,
     target_high: float = 0.98,
+    positive_threshold: float = 0.5,
     return_details: bool = False,
 ):
+    if not 0.0 <= positive_threshold <= 1.0:
+        raise ValueError(f"positive_threshold must be in [0, 1], got {positive_threshold}")
     training = optimizer is not None
     model.train(training)
     criterion.train(training)
@@ -196,7 +199,7 @@ def run_epoch(
                 max_abs_logit = max(max_abs_logit, batch_max_abs_logit)
                 logit_count += logits.numel()
                 probs = torch.sigmoid(logits)
-                preds = (probs >= 0.5).long()
+                preds = (probs >= positive_threshold).long()
 
                 all_logits.extend(logits.detach().cpu().tolist())
                 all_probs.extend(probs.detach().cpu().tolist())

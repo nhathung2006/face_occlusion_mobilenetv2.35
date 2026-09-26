@@ -119,6 +119,10 @@ def evaluate_dataset_dir(
     print(f"Test-Time Augmentation (TTA): {'ENABLED (2-pass Horizontal Flip)' if use_tta else 'DISABLED'}")
 
     class_names = list(cfg["data"]["class_names"])
+    occluded_threshold = float(cfg.get("inference", {}).get("occluded_threshold", 0.5))
+    if not 0.0 <= occluded_threshold <= 1.0:
+        raise ValueError(f"inference.occluded_threshold must be in [0, 1], got {occluded_threshold}")
+    print(f"Occluded decision threshold: {occluded_threshold:.2f}")
     _, eval_transform = build_transforms(cfg)
 
     # Use ExplicitClassImageDataset for labeled dataset
@@ -169,7 +173,7 @@ def evaluate_dataset_dir(
                     loss_targets = apply_target_smoothing(loss_targets, target_low, target_high)
                 loss = criterion(logits_1d, loss_targets)
                 probs_occ = torch.sigmoid(logits_1d).cpu()
-                preds = (probs_occ >= 0.5).long()
+                preds = (probs_occ >= occluded_threshold).long()
                 confidences = torch.where(preds == 1, probs_occ, 1.0 - probs_occ)
                 all_logits.extend(logits_1d.cpu().tolist())
                 all_probs.extend(probs_occ.tolist())

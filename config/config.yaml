@@ -71,10 +71,10 @@ training:
 
   early_stopping:
     enabled: true
-    patience: 16                  # Dừng training sau 16 epoch không cải thiện val_loss
-    monitor: val_loss             # Theo dõi val_loss để kiểm soát overfitting
-    mode: min                     # Tìm cực tiểu val_loss
-    min_delta: 0.0005             # Ngưỡng cải thiện tối thiểu của val_loss
+    patience: 16                  # Dừng training sau 16 epoch không cải thiện val_f1
+    monitor: val_f1               # Chọn checkpoint theo macro F1 trên validation
+    mode: max                     # F1 càng cao càng tốt
+    min_delta: 0.0005             # Mức tăng F1 tối thiểu được tính là cải thiện
     restore_best_weights: true    # Tự động khôi phục weights tốt nhất khi dừng hoặc kết thúc
 
 augmentation:
@@ -102,5 +102,5 @@ evaluation:
   use_tta: false                  # Bật/tắt Test-Time Augmentation (2-pass Horizontal Flip) khi test/eval
 
 inference:
-  confidence_threshold: 0.4
+  occluded_threshold: 0.4         # Dự đoán occluded khi sigmoid(logit) >= ngưỡng này
   use_tta: false                  # Tùy chọn TTA khi inference
