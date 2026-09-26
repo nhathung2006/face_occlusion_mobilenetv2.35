@@ -7,11 +7,24 @@ import time
 
 import matplotlib.pyplot as plt
 import torch
+import torch.nn as nn
 from tqdm import tqdm
 
 from src.evaluation.metrics import compute_metrics
 from src.training.losses import apply_target_smoothing
 from src.utils.training import save_checkpoint
+
+
+def _set_frozen_batchnorm_eval(model: torch.nn.Module) -> None:
+    """Keep BatchNorm running statistics fixed when its affine params are frozen."""
+    for module in model.modules():
+        if (
+            isinstance(module, nn.modules.batchnorm._BatchNorm)
+            and module.affine
+            and not module.weight.requires_grad
+            and not module.bias.requires_grad
+        ):
+            module.eval()
 
 
 class EarlyStopping:
@@ -133,6 +146,10 @@ def run_epoch(
 ):
     training = optimizer is not None
     model.train(training)
+    if training:
+        # model.train() also switches frozen backbone BatchNorm layers to train mode.
+        # Put them back in eval mode so running_mean/running_var stay at pretrained values.
+        _set_frozen_batchnorm_eval(model)
     total_loss = 0.0
     y_true, y_pred = [], []
     all_logits, all_probs = [], []

@@ -12,3 +12,9 @@ ENV/
 .coverage
 htmlcov/
 dataset/_trash/
+
+# Local training data: keep on this machine, do not include in commits.
+/dataset/
+
+# Generated training/evaluation artifacts.
+/outputs/

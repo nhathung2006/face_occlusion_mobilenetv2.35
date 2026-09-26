@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 import csv
+import hashlib
 from pathlib import Path
 import random
 import re
@@ -25,30 +26,68 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
         pass
 
 
+def get_file_sha256(path: Path) -> str:
+    """Compute SHA-256 hash of image file content to detect binary duplicates."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def get_group_id(filename: str) -> str:
-    """Group crops belonging to the same source image or recording session."""
-    # Pattern 1: WIDER FACE base image (e.g. 0--Parade_...jpg_b1234.jpg)
-    m_wider = re.match(r"^(.*\.jpg)_b\d+\.jpg$", filename, re.IGNORECASE)
+    """Group crops belonging to the same source image, face identity, or recording session to avoid leakage."""
+    # Pattern 1: WIDER FACE base image (e.g. 0--Parade_...jpg_b1234_masked.jpg, 0--Parade_...jpg_b1234.jpg)
+    m_wider = re.match(r"^(.*\.jpg)_b\d+(?:_masked)?(?:\.jpg)?$", filename, re.IGNORECASE)
     if m_wider:
         return f"wider_{m_wider.group(1)}"
 
-    # Pattern 2: Face dataset aligned/crop IDs (e.g. face_0028_aligned112.jpg, face_0028_crop.jpg)
+    # Pattern 2: Camera stream crop session (e.g. 01a0b348-9ab8-73e3-9797-86234c0f24be_nvr-llWGaUl9M9E771xokkJUiNr5fMyJBigI_1789714275642_img_face1.jpg)
+    m_cam = re.match(r"^([a-f0-9\-]+_[a-zA-Z0-9\-]+_\d+)", filename, re.IGNORECASE)
+    if m_cam:
+        return f"cam_{m_cam.group(1)}"
+
+    # Pattern 3: Numeric face ID with optional mask/aligned (e.g. 000159_face.jpg, 000159_face_masked.jpg, 000159_face1.jpg)
+    m_face_num = re.match(r"^(\d+)_face", filename, re.IGNORECASE)
+    if m_face_num:
+        return f"facenum_{m_face_num.group(1)}"
+
+    # Pattern 4: Face dataset aligned/crop IDs (e.g. face_0028_aligned112.jpg, face_0028_crop.jpg)
     m_face = re.match(r"^(face_\d+)", filename, re.IGNORECASE)
     if m_face:
         return f"face_id_{m_face.group(1)}"
 
-    # Pattern 3: Lumi staff recording session (e.g. PhongLT_20260415_090449_774.jpg -> PhongLT_20260415_0904)
+    # Pattern 5: Lumi staff recording session (e.g. PhongLT_20260415_090449_774.jpg -> PhongLT_20260415_0904)
     m_person_session = re.match(r"^([A-Za-z]+)_(\d{8}_\d{4})", filename)
     if m_person_session:
         return f"person_session_{m_person_session.group(1)}_{m_person_session.group(2)}"
 
-    # Pattern 4: Lumi staff person generic
+    # Pattern 6: Lumi staff person generic
     m_person = re.match(r"^([A-Za-z]+)_[0-9]+", filename)
     if m_person:
         return f"person_{m_person.group(1)}"
 
-    # Pattern 5: Single file
+    # Pattern 7: Single file
     return f"single_{filename}"
+
+
+def get_source_type(filename: str) -> str:
+    """Classify the origin / domain / occlusion style of the face crop."""
+    if "nvr-" in filename or filename.startswith(("01a", "01b", "01c", "01d", "01e", "01f")):
+        return "cam_stream"
+    if "--" in filename:
+        if "_masked" in filename.lower():
+            return "wider_synth_mask"
+        return "wider_face"
+    if filename.lower().startswith("with_mask_"):
+        return "real_mask"
+    if "_masked" in filename.lower():
+        return "synth_mask"
+    if any(filename.startswith(k) for k in ["PhongLT", "DoanNV", "MaiNT", "Hung", "Tuan"]):
+        return "lumi_staff"
+    if re.match(r"^\d+_face", filename) or filename.startswith("face_"):
+        return "face_crops"
+    return "other"
 
 
 def split_data(
@@ -73,7 +112,10 @@ def split_data(
                     w, h = img.size
                 is_sq = (w == h)
                 ar = round(w / h, 2)
-                size_bin = "small" if max(w, h) < 75 else ("medium" if max(w, h) < 112 else "large")
+                size_bin = "small(<75)" if max(w, h) < 75 else ("medium(75-111)" if max(w, h) < 112 else "large(>=112)")
+                source_type = get_source_type(f.name)
+                name_grp = get_group_id(f.name)
+                sha256_hash = get_file_sha256(f)
                 items.append({
                     "path": f,
                     "name": f.name,
@@ -83,28 +125,67 @@ def split_data(
                     "aspect_ratio": ar,
                     "is_square": is_sq,
                     "size_bin": size_bin,
-                    "group": get_group_id(f.name),
+                    "source_type": source_type,
+                    "name_group": name_grp,
+                    "sha256": sha256_hash,
                 })
 
     total_count = len(items)
     if total_count == 0:
         raise ValueError(f"No valid images found in {raw_dir}")
 
+    # Disjoint Set / Union-Find: Merge groups sharing the same binary hash or name_group
+    parent: dict[int, int] = {i: i for i in range(total_count)}
+
+    def find(i: int) -> int:
+        if parent[i] == i:
+            return i
+        parent[i] = find(parent[i])
+        return parent[i]
+
+    def union(i: int, j: int) -> None:
+        root_i = find(i)
+        root_j = find(j)
+        if root_i != root_j:
+            parent[root_i] = root_j
+
+    hash_to_indices = defaultdict(list)
+    name_group_to_indices = defaultdict(list)
+
+    for i, it in enumerate(items):
+        hash_to_indices[it["sha256"]].append(i)
+        name_group_to_indices[it["name_group"]].append(i)
+
+    # Union all identical file contents (zero duplicate hash across splits)
+    for indices in hash_to_indices.values():
+        for idx in indices[1:]:
+            union(indices[0], idx)
+
+    # Union all items sharing same metadata group
+    for grp_name, indices in name_group_to_indices.items():
+        if not grp_name.startswith("single_"):
+            for idx in indices[1:]:
+                union(indices[0], idx)
+
+    for i, it in enumerate(items):
+        it["group"] = f"group_{find(i)}"
+
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for it in items:
         groups[it["group"]].append(it)
 
-    # Multi-criteria Stratification Signature
-    def group_signature(g: list[dict[str, Any]]) -> tuple[str, str, bool]:
+    # Multi-criteria Stratification Signature: Class + Source Domain + Resolution / Difficulty
+    def group_signature(g: list[dict[str, Any]]) -> tuple[str, str, str]:
         c_clear = sum(1 for x in g if x["class"] == "clear")
         c_occ = sum(1 for x in g if x["class"] == "occluded")
         dom_cls = "clear" if c_clear >= c_occ else "occluded"
+        sources = Counter(x["source_type"] for x in g)
+        dom_source = sources.most_common(1)[0][0]
         sizes = Counter(x["size_bin"] for x in g)
         dom_size = sizes.most_common(1)[0][0]
-        has_non_sq = any(not x["is_square"] for x in g)
-        return (dom_cls, dom_size, has_non_sq)
+        return (dom_cls, dom_source, dom_size)
 
-    strata: dict[tuple[str, str, bool], list[list[dict[str, Any]]]] = defaultdict(list)
+    strata: dict[tuple[str, str, str], list[list[dict[str, Any]]]] = defaultdict(list)
     for g in groups.values():
         strata[group_signature(g)].append(g)
 
@@ -115,6 +196,9 @@ def split_data(
         random.shuffle(g_list)
         n_groups = len(g_list)
         n_val = int(round(n_groups * val_ratio))
+        # Ensure non-empty representation for moderately sized strata
+        if n_groups >= 4 and n_val == 0:
+            n_val = 1
         for i, g in enumerate(g_list):
             if i < n_val:
                 val_items.extend(g)
@@ -155,6 +239,7 @@ def apply_split(
             "aspect_ratio": it["aspect_ratio"],
             "is_square": it["is_square"],
             "size_bin": it["size_bin"],
+            "source_type": it["source_type"],
             "group_id": it["group"],
             "source_path": str(it["path"]),
         })
@@ -172,6 +257,7 @@ def apply_split(
             "aspect_ratio": it["aspect_ratio"],
             "is_square": it["is_square"],
             "size_bin": it["size_bin"],
+            "source_type": it["source_type"],
             "group_id": it["group"],
             "source_path": str(it["path"]),
         })
@@ -187,6 +273,7 @@ def apply_split(
             "aspect_ratio",
             "is_square",
             "size_bin",
+            "source_type",
             "group_id",
             "source_path",
         ]
@@ -211,9 +298,9 @@ def main():
     seed = int(args.seed if args.seed is not None else cfg["training"].get("seed", 42))
     val_ratio = float(args.val_ratio)
 
-    print("=" * 60)
-    print("       DATASET STRATIFIED GROUP SPLIT (80/20)")
-    print("=" * 60)
+    print("=" * 70)
+    print("       DATASET MULTI-CRITERIA STRATIFIED GROUP SPLIT (80/20)")
+    print("=" * 70)
     print(f"Data root: {data_root}")
     print(f"Seed:      {seed}")
     print(f"Val ratio: {val_ratio:.2f}")
@@ -228,19 +315,27 @@ def main():
     val_clear = sum(1 for x in val_items if x["class"] == "clear")
     val_occ = sum(1 for x in val_items if x["class"] == "occluded")
 
-    print("\n" + "=" * 60)
-    print("                   SPLIT SUMMARY")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print("                         SPLIT SUMMARY")
+    print("=" * 70)
     print(f"Total Images: {total_imgs}")
-    print(f"Train Set:    {len(train_items):4d} ({len(train_items)/total_imgs*100:.1f}%) [clear: {tr_clear:3d}, occluded: {tr_occ:3d}]")
-    print(f"Val Set:      {len(val_items):4d} ({len(val_items)/total_imgs*100:.1f}%) [clear: {val_clear:3d}, occluded: {val_occ:3d}]")
-    print("-" * 60)
-    print("Train Size Distribution:", dict(Counter(x["size_bin"] for x in train_items)))
-    print("Val Size Distribution:  ", dict(Counter(x["size_bin"] for x in val_items)))
-    print("-" * 60)
-    print("Train Square Distribution: True=", sum(1 for x in train_items if x["is_square"]), "False=", sum(1 for x in train_items if not x["is_square"]))
-    print("Val Square Distribution:   True=", sum(1 for x in val_items if x["is_square"]), "False=", sum(1 for x in val_items if not x["is_square"]))
-    print("=" * 60)
+    print(f"Train Set:    {len(train_items):4d} ({len(train_items)/total_imgs*100:.1f}%) [clear: {tr_clear:4d} ({tr_clear/len(train_items)*100:.1f}%), occluded: {tr_occ:4d} ({tr_occ/len(train_items)*100:.1f}%)]")
+    print(f"Val Set:      {len(val_items):4d} ({len(val_items)/total_imgs*100:.1f}%) [clear: {val_clear:4d} ({val_clear/len(val_items)*100:.1f}%), occluded: {val_occ:4d} ({val_occ/len(val_items)*100:.1f}%)]")
+    print("-" * 70)
+    print("Train Size (Difficulty) Distribution:")
+    for k, v in sorted(Counter(x["size_bin"] for x in train_items).items()):
+        print(f"  - {k:<15}: {v:4d} ({v/len(train_items)*100:.1f}%)")
+    print("Val Size (Difficulty) Distribution:")
+    for k, v in sorted(Counter(x["size_bin"] for x in val_items).items()):
+        print(f"  - {k:<15}: {v:4d} ({v/len(val_items)*100:.1f}%)")
+    print("-" * 70)
+    print("Train Domain/Source Distribution:")
+    for k, v in sorted(Counter(x["source_type"] for x in train_items).items()):
+        print(f"  - {k:<18}: {v:4d} ({v/len(train_items)*100:.1f}%)")
+    print("Val Domain/Source Distribution:")
+    for k, v in sorted(Counter(x["source_type"] for x in val_items).items()):
+        print(f"  - {k:<18}: {v:4d} ({v/len(val_items)*100:.1f}%)")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

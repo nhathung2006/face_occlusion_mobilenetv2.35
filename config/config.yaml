@@ -2,13 +2,13 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 1
-  dropout: 0.3
+  dropout: 0.2
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
 
 data:
-  root: "dataset"
+  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/Face/face_occlusion_mobilenetv2/face_occlusion_mobilenetv2/dataset"
   image_size: 112
   batch_size: 64
   num_workers: 2

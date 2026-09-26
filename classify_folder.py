@@ -248,7 +248,7 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=str,
-        default=r"C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\detect scrfd\crops_square",
+        default=r"C:\Thực tập LUMI\model_BaiToan\Deepleaning\data\test_classification_camera",
         help="Path to folder containing face images",
     )
     parser.add_argument(
