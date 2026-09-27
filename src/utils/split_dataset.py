@@ -4,6 +4,7 @@ import argparse
 from collections import Counter, defaultdict
 import csv
 import hashlib
+import os
 from pathlib import Path
 import random
 import re
@@ -11,6 +12,7 @@ import shutil
 import sys
 from typing import Any
 
+import numpy as np
 from PIL import Image
 import yaml
 
@@ -90,6 +92,29 @@ def get_source_type(filename: str) -> str:
     return "other"
 
 
+def image_quality_features(img: Image.Image) -> tuple[float, float, float]:
+    """Return approximate sharpness, contrast, and brightness features."""
+    gray = np.asarray(img.convert("L").resize((64, 64)), dtype=np.float32)
+    laplacian = (
+        -4.0 * gray
+        + np.roll(gray, 1, axis=0)
+        + np.roll(gray, -1, axis=0)
+        + np.roll(gray, 1, axis=1)
+        + np.roll(gray, -1, axis=1)
+    )
+    return float(laplacian.var()), float(gray.std()), float(gray.mean())
+
+
+def get_aspect_ratio_bin(aspect_ratio: float) -> str:
+    if aspect_ratio < 0.80:
+        return "portrait(<0.80)"
+    if aspect_ratio <= 1.25:
+        return "square(0.80-1.25)"
+    if aspect_ratio <= 1.80:
+        return "landscape(1.25-1.80)"
+    return "wide(>1.80)"
+
+
 def split_data(
     data_root: Path,
     val_ratio: float = 0.20,
@@ -99,7 +124,7 @@ def split_data(
     if not raw_dir.exists():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
 
-    random.seed(seed)
+    rng = random.Random(seed)
     items: list[dict[str, Any]] = []
 
     for cls_name in ["clear", "occluded"]:
@@ -110,6 +135,7 @@ def split_data(
             if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
                 with Image.open(f) as img:
                     w, h = img.size
+                    sharpness, contrast, brightness = image_quality_features(img)
                 is_sq = (w == h)
                 ar = round(w / h, 2)
                 size_bin = "small(<75)" if max(w, h) < 75 else ("medium(75-111)" if max(w, h) < 112 else "large(>=112)")
@@ -123,8 +149,12 @@ def split_data(
                     "width": w,
                     "height": h,
                     "aspect_ratio": ar,
+                    "aspect_ratio_bin": get_aspect_ratio_bin(ar),
                     "is_square": is_sq,
                     "size_bin": size_bin,
+                    "sharpness": sharpness,
+                    "contrast": contrast,
+                    "brightness": brightness,
                     "source_type": source_type,
                     "name_group": name_grp,
                     "sha256": sha256_hash,
@@ -133,6 +163,34 @@ def split_data(
     total_count = len(items)
     if total_count == 0:
         raise ValueError(f"No valid images found in {raw_dir}")
+
+    sharpness_values = np.asarray([it["sharpness"] for it in items], dtype=np.float64)
+    contrast_values = np.asarray([it["contrast"] for it in items], dtype=np.float64)
+    sharpness_cutoffs = np.quantile(sharpness_values, [1 / 3, 2 / 3])
+    contrast_cutoffs = np.quantile(contrast_values, [1 / 3, 2 / 3])
+    for it in items:
+        it["sharpness_bin"] = (
+            "soft/blurry" if it["sharpness"] <= sharpness_cutoffs[0]
+            else "moderate" if it["sharpness"] <= sharpness_cutoffs[1]
+            else "sharp"
+        )
+        it["contrast_bin"] = (
+            "low_contrast" if it["contrast"] <= contrast_cutoffs[0]
+            else "moderate" if it["contrast"] <= contrast_cutoffs[1]
+            else "high_contrast"
+        )
+        difficulty_score = 0.0
+        difficulty_score += {"small(<75)": 1.5, "medium(75-111)": 0.6, "large(>=112)": 0.0}[it["size_bin"]]
+        difficulty_score += {"soft/blurry": 1.0, "moderate": 0.35, "sharp": 0.0}[it["sharpness_bin"]]
+        difficulty_score += {"low_contrast": 0.8, "moderate": 0.25, "high_contrast": 0.0}[it["contrast_bin"]]
+        if it["brightness"] < 50 or it["brightness"] > 210:
+            difficulty_score += 0.8
+        it["difficulty_score"] = round(difficulty_score, 3)
+        it["difficulty_bin"] = (
+            "easy" if difficulty_score < 0.8
+            else "medium" if difficulty_score < 1.8
+            else "hard"
+        )
 
     # Disjoint Set / Union-Find: Merge groups sharing the same binary hash or name_group
     parent: dict[int, int] = {i: i for i in range(total_count)}
@@ -174,36 +232,87 @@ def split_data(
     for it in items:
         groups[it["group"]].append(it)
 
-    # Multi-criteria Stratification Signature: Class + Source Domain + Resolution / Difficulty
-    def group_signature(g: list[dict[str, Any]]) -> tuple[str, str, str]:
-        c_clear = sum(1 for x in g if x["class"] == "clear")
-        c_occ = sum(1 for x in g if x["class"] == "occluded")
-        dom_cls = "clear" if c_clear >= c_occ else "occluded"
-        sources = Counter(x["source_type"] for x in g)
-        dom_source = sources.most_common(1)[0][0]
-        sizes = Counter(x["size_bin"] for x in g)
-        dom_size = sizes.most_common(1)[0][0]
-        return (dom_cls, dom_source, dom_size)
+    # Balance marginal distributions while keeping duplicate/source groups intact.
+    # Features include class, source domain, resolution, aspect ratio, sharpness,
+    # contrast, and an image-quality difficulty proxy.
+    feature_fields = {
+        "class": 5.0,
+        "aspect_ratio_bin": 3.0,
+        "difficulty_bin": 3.0,
+        "size_bin": 2.0,
+        "sharpness_bin": 2.0,
+        "contrast_bin": 2.0,
+        "source_type": 1.0,
+    }
+    group_list = list(groups.values())
+    group_vectors: list[Counter[str]] = []
+    total_features: Counter[str] = Counter()
+    for group_items in group_list:
+        vector: Counter[str] = Counter()
+        for item in group_items:
+            for field in feature_fields:
+                vector[f"{field}={item[field]}"] += 1
+        group_vectors.append(vector)
+        total_features.update(vector)
 
-    strata: dict[tuple[str, str, str], list[list[dict[str, Any]]]] = defaultdict(list)
-    for g in groups.values():
-        strata[group_signature(g)].append(g)
+    target_val_count = total_count * val_ratio
+    target_features = {key: value * val_ratio for key, value in total_features.items()}
 
-    train_items: list[dict[str, Any]] = []
-    val_items: list[dict[str, Any]] = []
+    def split_cost(val_count: int, val_features: Counter[str]) -> float:
+        count_error = (val_count - target_val_count) / max(target_val_count, 1.0)
+        cost = 10.0 * count_error * count_error
+        for key, target in target_features.items():
+            error = (val_features[key] - target) / max(target, 1.0)
+            field = key.split("=", 1)[0]
+            cost += feature_fields[field] * error * error
+        return cost
 
-    for sig, g_list in sorted(strata.items(), key=lambda x: str(x[0])):
-        random.shuffle(g_list)
-        n_groups = len(g_list)
-        n_val = int(round(n_groups * val_ratio))
-        # Ensure non-empty representation for moderately sized strata
-        if n_groups >= 4 and n_val == 0:
-            n_val = 1
-        for i, g in enumerate(g_list):
-            if i < n_val:
-                val_items.extend(g)
-            else:
-                train_items.extend(g)
+    best_val_indices: set[int] | None = None
+    best_cost = float("inf")
+    # Several seeded starts plus local swaps reduce dependence on input ordering.
+    for _ in range(4):
+        order = list(range(len(group_list)))
+        rng.shuffle(order)
+        val_indices: set[int] = set()
+        val_count = 0
+        val_features: Counter[str] = Counter()
+        for index in order:
+            group_size = len(group_list[index])
+            if val_count < target_val_count:
+                val_indices.add(index)
+                val_count += group_size
+                val_features.update(group_vectors[index])
+
+        train_indices = set(range(len(group_list))) - val_indices
+        current_cost = split_cost(val_count, val_features)
+        for _step in range(12000):
+            if not val_indices or not train_indices:
+                break
+            val_index = rng.choice(tuple(val_indices))
+            train_index = rng.choice(tuple(train_indices))
+            next_count = val_count - len(group_list[val_index]) + len(group_list[train_index])
+            next_features = val_features.copy()
+            next_features.subtract(group_vectors[val_index])
+            next_features.update(group_vectors[train_index])
+            next_cost = split_cost(next_count, next_features)
+            if next_cost + 1e-12 < current_cost:
+                val_indices.remove(val_index)
+                val_indices.add(train_index)
+                train_indices.remove(train_index)
+                train_indices.add(val_index)
+                val_count = next_count
+                val_features = next_features
+                current_cost = next_cost
+
+        if current_cost < best_cost:
+            best_cost = current_cost
+            best_val_indices = val_indices
+
+    if best_val_indices is None:
+        raise RuntimeError("Could not create train/validation split")
+
+    val_items = [item for index, group_items in enumerate(group_list) if index in best_val_indices for item in group_items]
+    train_items = [item for index, group_items in enumerate(group_list) if index not in best_val_indices for item in group_items]
 
     return train_items, val_items
 
@@ -215,73 +324,71 @@ def apply_split(
 ) -> None:
     train_dir = data_root / "train"
     val_dir = data_root / "val"
-
-    # Ensure clean target folders
-    for split_dir in [train_dir, val_dir]:
-        for cls_name in ["clear", "occluded"]:
-            target_cls = split_dir / cls_name
-            if target_cls.exists():
-                shutil.rmtree(target_cls)
-            target_cls.mkdir(parents=True, exist_ok=True)
+    staging_dir = data_root / f".split_staging_{os.getpid()}"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    train_stage = staging_dir / "train"
+    val_stage = staging_dir / "val"
+    for split_dir in (train_stage, val_stage):
+        for cls_name in ("clear", "occluded"):
+            (split_dir / cls_name).mkdir(parents=True, exist_ok=True)
 
     manifest_rows: list[dict[str, Any]] = []
 
-    print(f"Copying {len(train_items)} train images...")
-    for it in train_items:
-        dst = train_dir / it["class"] / it["name"]
-        shutil.copy2(it["path"], dst)
-        manifest_rows.append({
-            "filename": it["name"],
-            "split": "train",
-            "class": it["class"],
-            "width": it["width"],
-            "height": it["height"],
-            "aspect_ratio": it["aspect_ratio"],
-            "is_square": it["is_square"],
-            "size_bin": it["size_bin"],
-            "source_type": it["source_type"],
-            "group_id": it["group"],
-            "source_path": str(it["path"]),
-        })
+    try:
+        print(f"Copying {len(train_items)} train images...")
+        for split_name, split_items, split_dir in (
+            ("train", train_items, train_stage),
+            ("val", val_items, val_stage),
+        ):
+            for it in split_items:
+                dst = split_dir / it["class"] / it["name"]
+                shutil.copy2(it["path"], dst)
+                manifest_rows.append({
+                    "filename": it["name"],
+                    "split": split_name,
+                    "class": it["class"],
+                    "width": it["width"],
+                    "height": it["height"],
+                    "aspect_ratio": it["aspect_ratio"],
+                    "aspect_ratio_bin": it["aspect_ratio_bin"],
+                    "is_square": it["is_square"],
+                    "size_bin": it["size_bin"],
+                    "sharpness": round(it["sharpness"], 4),
+                    "sharpness_bin": it["sharpness_bin"],
+                    "contrast": round(it["contrast"], 4),
+                    "contrast_bin": it["contrast_bin"],
+                    "brightness": round(it["brightness"], 4),
+                    "difficulty_score": it["difficulty_score"],
+                    "difficulty_bin": it["difficulty_bin"],
+                    "source_type": it["source_type"],
+                    "group_id": it["group"],
+                    "source_path": str(it["path"]),
+                })
+            if split_name == "train":
+                print(f"Copying {len(val_items)} validation images...")
 
-    print(f"Copying {len(val_items)} validation images...")
-    for it in val_items:
-        dst = val_dir / it["class"] / it["name"]
-        shutil.copy2(it["path"], dst)
-        manifest_rows.append({
-            "filename": it["name"],
-            "split": "val",
-            "class": it["class"],
-            "width": it["width"],
-            "height": it["height"],
-            "aspect_ratio": it["aspect_ratio"],
-            "is_square": it["is_square"],
-            "size_bin": it["size_bin"],
-            "source_type": it["source_type"],
-            "group_id": it["group"],
-            "source_path": str(it["path"]),
-        })
+        manifest_path = data_root / "split_manifest.csv"
+        manifest_temp = staging_dir / "split_manifest.csv"
+        fieldnames = list(manifest_rows[0].keys())
+        with manifest_temp.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(manifest_rows)
 
-    manifest_path = data_root / "split_manifest.csv"
-    with manifest_path.open("w", newline="", encoding="utf-8") as f:
-        fieldnames = [
-            "filename",
-            "split",
-            "class",
-            "width",
-            "height",
-            "aspect_ratio",
-            "is_square",
-            "size_bin",
-            "source_type",
-            "group_id",
-            "source_path",
-        ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(manifest_rows)
-
-    print(f"Manifest written to: {manifest_path}")
+        # Replace the old splits only after the complete new split was copied.
+        for old_dir in (train_dir, val_dir):
+            if old_dir.exists():
+                shutil.rmtree(old_dir)
+        shutil.move(str(train_stage), str(train_dir))
+        shutil.move(str(val_stage), str(val_dir))
+        if manifest_path.exists():
+            manifest_path.unlink()
+        shutil.move(str(manifest_temp), str(manifest_path))
+        print(f"Manifest written to: {manifest_path}")
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def main():
@@ -299,7 +406,7 @@ def main():
     val_ratio = float(args.val_ratio)
 
     print("=" * 70)
-    print("       DATASET MULTI-CRITERIA STRATIFIED GROUP SPLIT (80/20)")
+    print("       GROUP-AWARE DATASET SPLIT (CLASS / QUALITY / ASPECT RATIO)")
     print("=" * 70)
     print(f"Data root: {data_root}")
     print(f"Seed:      {seed}")
@@ -328,6 +435,19 @@ def main():
     print("Val Size (Difficulty) Distribution:")
     for k, v in sorted(Counter(x["size_bin"] for x in val_items).items()):
         print(f"  - {k:<15}: {v:4d} ({v/len(val_items)*100:.1f}%)")
+    print("-" * 70)
+    for title, field in (
+        ("Aspect ratio", "aspect_ratio_bin"),
+        ("Image difficulty", "difficulty_bin"),
+        ("Sharpness", "sharpness_bin"),
+    ):
+        print(f"{title} distribution (train / val):")
+        train_counts = Counter(x[field] for x in train_items)
+        val_counts = Counter(x[field] for x in val_items)
+        for key in sorted(set(train_counts) | set(val_counts)):
+            tr_pct = train_counts[key] / max(len(train_items), 1) * 100
+            va_pct = val_counts[key] / max(len(val_items), 1) * 100
+            print(f"  - {key:<22}: {train_counts[key]:4d} ({tr_pct:5.1f}%) / {val_counts[key]:4d} ({va_pct:5.1f}%)")
     print("-" * 70)
     print("Train Domain/Source Distribution:")
     for k, v in sorted(Counter(x["source_type"] for x in train_items).items()):

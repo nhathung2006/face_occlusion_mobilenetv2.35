@@ -59,6 +59,15 @@ def main():
     elif len(class_names) != num_classes:
         raise ValueError(f"num_classes={num_classes}, but dataset has {len(class_names)} class folders")
 
+    if not bool(cfg.get("model", {}).get("pretrained", False)):
+        raise ValueError(
+            "Fresh training is configured to start from pretrained weights; "
+            "set model.pretrained: true in the selected config."
+        )
+    print(
+        "Starting a fresh training run from the configured pretrained weights; "
+        "no face-occlusion checkpoint is resumed."
+    )
     model = build_model(cfg).to(device)
     total_params = count_parameters(model)
     total_epochs = int(cfg["training"]["epochs"])

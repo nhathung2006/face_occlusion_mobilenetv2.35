@@ -2,7 +2,7 @@ model:
   name: mobilenetv2
   width_mult: 0.35
   num_classes: 1
-  dropout: 0.2
+  dropout: 0.3
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -42,7 +42,7 @@ training:
     monitor: val_loss             # Theo dõi validation loss
     mode: min                     # Giảm khi loss không giảm
     factor: 0.50                  # Giảm 50% LR nếu không cải thiện
-    patience: 8                   # Giảm LR nếu val_loss chững lại sau 8 epoch
+    patience: 6                   # Giảm LR nếu val_loss chững lại sau 8 epoch
     min_lr: 0.000001              # Tốc độ học nhỏ nhất (1e-6)
     threshold: 0.0005             # Ngưỡng cải thiện tối thiểu
     cooldown: 1                   # Số epoch chờ trước khi bắt đầu đếm patience mới
@@ -102,5 +102,5 @@ evaluation:
   use_tta: false                  # Bật/tắt Test-Time Augmentation (2-pass Horizontal Flip) khi test/eval
 
 inference:
-  occluded_threshold: 0.4         # Dự đoán occluded khi sigmoid(logit) >= ngưỡng này
+  occluded_threshold: 0.50        # Dự đoán occluded khi sigmoid(logit) >= ngưỡng này
   use_tta: false                  # Tùy chọn TTA khi inference
