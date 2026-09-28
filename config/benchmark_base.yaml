@@ -1,0 +1,95 @@
+# Shared settings for the MobileNetV2 0.35 vs 0.5 benchmark.
+# Edit this file for settings that must stay identical between both runs.
+model:
+  name: mobilenetv2
+  num_classes: 1
+  dropout: 0.3
+  pretrained: true
+  freeze_backbone_epochs: 0
+
+data:
+  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/Face/face_occlusion_mobilenetv2/face_occlusion_mobilenetv2/dataset"
+  image_size: 112
+  batch_size: 64
+  num_workers: 2
+  pin_memory: true
+  class_names:
+    - clear
+    - occluded
+
+training:
+  epochs: 110
+  seed: 42
+  optimizer: sgd
+  momentum: 0.90
+  nesterov: true
+  weight_decay: 0.0003
+
+  two_stage:
+    enabled: true
+    stage1_epochs: 8
+    stage1_lr: 0.008
+    unfreeze_from_block: 7
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+    stage2_backbone_lr: 0.0004
+    stage2_classifier_lr: 0.004
+
+  scheduler: plateau_to_cosine
+  plateau_to_cosine:
+    switch_epoch: 50
+  plateau:
+    monitor: val_loss
+    mode: min
+    factor: 0.50
+    patience: 6
+    min_lr: 0.000001
+    threshold: 0.0005
+    cooldown: 1
+  cosine:
+    eta_min: 0.000001
+
+  loss_type: bce
+  focal:
+    gamma: 1.0
+    alpha: 0.0
+  pos_weight: 1.0
+  label_smoothing: 0.00
+  target_smoothing:
+    enabled: true
+    target_low: 0.02
+    target_high: 0.98
+  logit_penalty:
+    enabled: true
+    max_logit: 3.8918203
+    margin_weight: 0.05
+    l2_weight: 0.0
+  early_stopping:
+    enabled: true
+    patience: 16
+    monitor: val_f1
+    mode: max
+    min_delta: 0.0005
+    restore_best_weights: true
+
+augmentation:
+  horizontal_flip: 0.50
+  rotation_degrees: 15
+  brightness: 0.20
+  contrast: 0.20
+  saturation: 0.20
+  hue: 0.05
+  gaussian_noise_std: 0.00
+
+evaluation:
+  enabled: true
+  split: val
+  use_tta: false
+
+inference:
+  occluded_threshold: 0.50
+  use_tta: false
+
+export:
+  opset: 17
+  dynamic_batch: true

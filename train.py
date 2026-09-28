@@ -40,6 +40,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    output_root = Path(cfg.get("outputs", {}).get("root", "outputs"))
     seed_everything(int(cfg["training"]["seed"]))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -364,18 +365,16 @@ def main():
         if early_stopping.best_row is not None:
             best_epoch_info = early_stopping.best_row
 
-    save_history(history, Path("outputs/history.csv"))
-    plot_history(history, Path("outputs/plots"))
+    save_history(history, output_root / "history.csv")
+    plot_history(history, output_root / "plots")
 
     evaluation_cfg = cfg.get("evaluation", {})
     if bool(evaluation_cfg.get("enabled", True)) and best_epoch_info is not None:
         project_root = Path(__file__).resolve().parent
         eval_split = str(evaluation_cfg.get("split", "val"))
         eval_output = Path(
-            evaluation_cfg.get("misclassified_dir", "outputs/misclassified_val")
+            evaluation_cfg.get("output_dir", output_root / f"eval_{eval_split}")
         )
-        if not eval_output.is_absolute():
-            eval_output = project_root / eval_output
 
         eval_command = [
             sys.executable,
@@ -386,7 +385,7 @@ def main():
             str(best_path.resolve()),
             "--split",
             eval_split,
-            "--misclassified-dir",
+            "--output-dir",
             str(eval_output.resolve()),
         ]
         print("\nRunning automatic validation evaluation...")

@@ -9,6 +9,7 @@ import torch.nn as nn
 from src.models.mobilenetv2 import MobileNetV2
 
 PRETRAINED_URLS = {
+    0.5: "https://github.com/d-li14/mobilenetv2.pytorch/raw/master/pretrained/mobilenetv2_0.5-eaa6f9ad.pth",
     0.35: "https://github.com/d-li14/mobilenetv2.pytorch/raw/master/pretrained/mobilenetv2_0.35-b2e15951.pth",
 }
 
@@ -31,8 +32,9 @@ def build_model(cfg: dict) -> nn.Module:
     num_classes = int(model_cfg["num_classes"])
     dropout = float(model_cfg["dropout"])
 
-    # Build a 1000-class model first so the upstream 0.35 ImageNet checkpoint
-    # can be loaded exactly, then replace the classifier for this 1-output binary occlusion task.
+    # Build a 1000-class model first so the upstream ImageNet checkpoint for
+    # the selected width multiplier can be loaded exactly, then replace the
+    # classifier for this binary occlusion task.
     model = MobileNetV2(num_classes=1000, width_mult=width_mult)
 
     pretrained_path = Path(model_cfg["pretrained_path"])
@@ -43,7 +45,8 @@ def build_model(cfg: dict) -> nn.Module:
             except Exception as e:
                 raise FileNotFoundError(
                     f"Pretrained weight not found at {pretrained_path} and failed to auto-download: {e}. "
-                    "Please download mobilenetv2_0.35-b2e15951.pth manually into weights/."
+                    f"Please download the MobileNetV2 width-{width_mult:g} pretrained checkpoint "
+                    f"manually into {pretrained_path}."
                 )
         state = torch.load(pretrained_path, map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:

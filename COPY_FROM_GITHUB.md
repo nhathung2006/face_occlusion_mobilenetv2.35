@@ -15,15 +15,20 @@ Into this project as:
 
 The included file is already a source-compatible copy of the upstream architecture, with attribution. You can replace it with the upstream file if you prefer to keep the repository version unchanged.
 
-## Required pretrained checkpoint (for transfer learning)
+## Pretrained checkpoints (for transfer learning)
 
-Download/copy:
+The default 0.35 configuration uses:
 
 `pretrained/mobilenetv2_0.35-b2e15951.pth`
 
-Into:
+The 0.5 benchmark configuration uses:
 
-`weights/mobilenetv2_0.35-b2e15951.pth`
+- `pretrained/mobilenetv2_0.5-eaa6f9ad.pth`
+
+Expected local paths:
+
+- `weights/mobilenetv2_0.35-b2e15951.pth`
+- `weights/mobilenetv2_0.5-eaa6f9ad.pth`
 
 No other upstream files are required for this project. In particular, do not copy the upstream `imagenet.py` training script or its ImageNet-specific utilities; this project has its own config-driven dataset/training/evaluation/export pipeline.
 

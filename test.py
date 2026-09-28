@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 from pathlib import Path
 import sys
@@ -23,7 +24,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from PIL import Image
-from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report, accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
 
 from src.datasets.dataset import build_loaders, build_transforms
 from src.training.losses import apply_target_smoothing, build_loss_criterion
@@ -240,8 +241,38 @@ def evaluate_dataset_dir(
         print(f"Logits Range:        [{np.min(all_logits):.3f}, {np.max(all_logits):.3f}] (Mean: {np.mean(all_logits):.3f}, Std: {np.std(all_logits):.3f})")
         print(f"Sigmoid Prob Range:  [{np.min(all_probs):.4f}, {np.max(all_probs):.4f}] (Mean: {np.mean(all_probs):.4f})")
     print("-" * 65)
+    report = classification_report(
+        y_true,
+        y_pred,
+        target_names=class_names,
+        digits=4,
+        zero_division=0,
+        output_dict=True,
+    )
     print(classification_report(y_true, y_pred, target_names=class_names, digits=4, zero_division=0))
     print("=" * 65)
+
+    metrics_path = output_dir / "metrics.json"
+    metrics_payload = {
+        "split": dataset_dir.name,
+        "num_samples": len(y_true),
+        "loss": float(avg_loss),
+        "accuracy": float(acc),
+        "macro_precision": float(macro_precision),
+        "macro_recall": float(macro_recall),
+        "macro_f1": float(macro_f1),
+        "occluded_threshold": float(occluded_threshold),
+        "model_parameters": int(sum(parameter.numel() for parameter in model.parameters())),
+        "evaluation_seconds": float(elapsed),
+        "images_per_second": float(len(test_ds) / elapsed) if elapsed > 0 else 0.0,
+        "class_names": class_names,
+        "confusion_matrix": confusion_matrix(y_true, y_pred, labels=list(range(len(class_names)))).tolist(),
+        "classification_report": report,
+        "checkpoint": str(checkpoint_path.resolve()),
+    }
+    with metrics_path.open("w", encoding="utf-8") as metrics_file:
+        json.dump(metrics_payload, metrics_file, ensure_ascii=False, indent=2)
+    print(f"Metrics JSON saved to: {metrics_path.resolve()}")
 
     # Save Confusion Matrix
     cm_path = output_dir / "confusion_matrix.png"
@@ -356,7 +387,9 @@ def main():
         else:
             raise FileNotFoundError(f"Dataset directory not found: {split_dir}")
 
-    out_dir = Path(args.output_dir or f"outputs/eval_{split_name}")
+    output_root = Path(cfg.get("outputs", {}).get("root", "outputs"))
+    default_eval_dir = output_root / f"eval_{split_name}"
+    out_dir = Path(args.output_dir) if args.output_dir else default_eval_dir
     evaluate_dataset_dir(cfg, checkpoint_path, split_dir, out_dir, batch_size=args.batch_size, use_tta=use_tta)
 
 

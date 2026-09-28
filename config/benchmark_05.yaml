@@ -1,0 +1,15 @@
+_base_: benchmark_base.yaml
+
+model:
+  width_mult: 0.5
+  pretrained_path: weights/mobilenetv2_0.5-eaa6f9ad.pth
+
+checkpoint:
+  best_path: checkpoints/benchmark/mobilenetv2_05/best.pth
+  last_path: checkpoints/benchmark/mobilenetv2_05/last.pth
+
+outputs:
+  root: outputs/benchmark/mobilenetv2_05
+
+export:
+  onnx_path: outputs/benchmark/mobilenetv2_05/mobilenetv2_05_face_occlusion.onnx

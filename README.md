@@ -14,7 +14,10 @@ The project is intentionally separated from the future face detector. The expect
 ```text
 face_occlusion_mobilenetv2/
 ├── config/
-│   └── config.yaml
+│   ├── config.yaml                 # Existing/default 0.35 experiment
+│   ├── benchmark_base.yaml         # Shared benchmark settings
+│   ├── benchmark_035.yaml          # 0.35-specific paths and width
+│   └── benchmark_05.yaml           # 0.5-specific paths and width
 ├── src/
 │   ├── models/
 │   │   └── mobilenetv2.py
@@ -42,6 +45,7 @@ face_occlusion_mobilenetv2/
 ├── checkpoints/
 ├── outputs/
 ├── train.py
+├── benchmark.py
 ├── test.py
 ├── export_onnx.py
 ├── inference.py
@@ -132,6 +136,38 @@ Use `config/config.yaml` for:
 
 Do not modify `src/models/mobilenetv2.py` just to change normal training hyperparameters.
 
+## Benchmark MobileNetV2 0.35 vs 0.5
+
+The two variants share the same source code and dataset. Shared training/data settings live in
+`config/benchmark_base.yaml`; edit `config/benchmark_035.yaml` and
+`config/benchmark_05.yaml` for model-specific settings. Checkpoints and run outputs are kept
+separate so one variant does not overwrite the other.
+
+To train only the new 0.5 model from ImageNet pretrained weights, then evaluate both saved
+checkpoints on the same validation split:
+
+```bash
+python benchmark.py --train 05
+```
+
+To evaluate both existing checkpoints without training:
+
+```bash
+python benchmark.py
+```
+
+To intentionally retrain both variants sequentially from their configured pretrained weights:
+
+```bash
+python benchmark.py --train both
+```
+
+The comparison table is written to `outputs/benchmark/summary.csv`; each model's detailed
+report, confusion matrix, and misclassified images are saved under its own `outputs/benchmark/`
+subfolder. The 0.5 pretrained weights are downloaded automatically if internet access is available.
+`benchmark.py` runs the variants sequentially to avoid competing for the same GPU and memory.
+
 ## Upstream GitHub files
 
-See `COPY_FROM_GITHUB.md`. Only the MobileNetV2 architecture source and, optionally, the pretrained 0.35 checkpoint are needed from the upstream repository.
+See `COPY_FROM_GITHUB.md`. The project can use upstream pretrained weights for both the 0.35 and
+0.5 width variants.
