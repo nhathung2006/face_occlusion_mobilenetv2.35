@@ -26,6 +26,7 @@ class ONNXFaceOcclusionClassifier:
             )
         self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
+        self.output_name = self.session.get_outputs()[0].name
         self.transform = build_eval_transform(self.image_size)
 
     def _preprocess_one(self, image):
@@ -39,7 +40,7 @@ class ONNXFaceOcclusionClassifier:
 
     def predict_batch(self, images):
         batch = np.stack([self._preprocess_one(img) for img in images]).astype(np.float32)
-        logits = self.session.run(["logits"], {self.input_name: batch})[0]
+        logits = self.session.run([self.output_name], {self.input_name: batch})[0]
         if logits.ndim == 1 or (logits.ndim == 2 and logits.shape[1] == 1):
             logits_1d = logits.reshape(-1)
             probs_occ = 1.0 / (1.0 + np.exp(-logits_1d))

@@ -79,7 +79,7 @@ training:
 
 augmentation:
   horizontal_flip: 0.50
-  rotation_degrees: 15
+  rotation_degrees: 0.0
   brightness: 0.20
   contrast: 0.20
   saturation: 0.20

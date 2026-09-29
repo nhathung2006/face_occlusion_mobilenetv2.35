@@ -1,0 +1,160 @@
+# Standalone configuration for binary clear/occluded training with four
+# auxiliary subclasses. This file intentionally does not inherit config.yaml.
+
+model:
+  name: mobilenetv2
+  width_mult: 0.35
+  dropout: 0.3
+  pretrained: true
+  pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
+
+data:
+  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/class"
+  image_size: 112
+  batch_size: 64
+  num_workers: 2
+  pin_memory: true
+  class_names:
+    - clear_full_face
+    - clear_side_face
+    - occluded_object
+    - occluded_pose
+  validation_fraction: 0.20
+  # Trial configs set data.split_manifest to their frozen grouped 80/20 split.
+  # Keep this default split unchanged for compatibility with existing checkpoints.
+
+task:
+  binary_class_names: [clear, occluded]
+  # Maps each four-way training label to its final binary class.
+  binary_label_by_subclass:
+    clear_full_face: clear
+    clear_side_face: clear
+    occluded_object: occluded
+    occluded_pose: occluded
+
+preprocessing:
+  normalization_mean: [0.485, 0.456, 0.406]
+  normalization_std: [0.229, 0.224, 0.225]
+  resize_interpolation: bilinear
+  antialias: true
+
+training:
+  epochs: 110
+  seed: 42
+  optimizer: sgd
+  momentum: 0.90
+  nesterov: true
+  weight_decay: 0.0005
+  # Best binary val macro-F1 among 0.00/0.15/0.30 on the 20260928 grouped split.
+  auxiliary_loss_weight: 0.30
+  auxiliary_class_weighting: inverse_frequency
+  auxiliary_label_smoothing: 0.00
+
+  two_stage:
+    enabled: true
+    stage1_epochs: 8
+    stage1_lr: 0.008
+    unfreeze_from_feature_index: 7
+    stage2_backbone_lr: 0.0004
+    stage2_classifier_lr: 0.004
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+
+  scheduler: plateau_to_cosine
+  plateau_to_cosine:
+    # Counted from each stage's scheduler initialization (Stage 2 starts at epoch 9).
+    switch_epoch: 30
+  plateau:
+    monitor: val_f1
+    mode: max
+    factor: 0.50
+    patience: 4
+    min_lr: 0.000001
+    threshold: 0.0005
+    cooldown: 1
+  cosine:
+    eta_min: 0.000001
+
+  target_smoothing:
+    enabled: true
+    target_low: 0.02
+    target_high: 0.98
+  logit_penalty:
+    enabled: true
+    max_logit: 3.8918203
+    margin_weight: 0.05
+    l2_weight: 0.0
+
+  early_stopping:
+    enabled: true
+    patience: 16
+    monitor: val_f1
+    mode: max
+    min_delta: 0.0005
+
+augmentation:
+  horizontal_flip: 0.50
+  rotation_degrees: 0.0
+  brightness: 0.20
+  contrast: 0.20
+  saturation: 0.20
+  hue: 0.05
+  gaussian_noise_std: 0.00
+
+inference:
+  occluded_threshold: 0.50
+
+runtime:
+  train_device: auto
+  evaluation_device: cpu
+
+evaluation:
+  output_dir: outputs/model_evaluation
+  auto_evaluate_after_training: true
+  batch_size: 64
+  contact_sheet:
+    columns: 4
+    rows: 5
+    thumbnail_width: 190
+    thumbnail_height: 160
+    caption_height: 52
+    jpeg_quality: 90
+  plots:
+    confusion_matrix_dpi: 160
+    history_dpi: 160
+    history_width: 12
+    history_height: 4.5
+
+experiments:
+  auxiliary_loss_weights: [0.00, 0.15, 0.30]
+  output_root: outputs/aux_weight_experiments
+  # Similar-looking images are grouped into one split, not automatically deleted.
+  near_duplicate_phash_distance: 4
+
+paths:
+  checkpoint_dir: checkpoints/4class_config_yaml
+  best_checkpoint_name: best.pth
+  last_checkpoint_name: last.pth
+  history_name: history.csv
+  onnx_path: outputs/onnx/face_4class_single_logit.onnx
+  onnx_opset: 17
+  onnx_dynamic_batch: true
+  onnx_input_name: images
+  onnx_output_name: logit
+
+relabel_web:
+  host: 127.0.0.1
+  port: 8765
+  manifest_path: outputs/relabel_review/train_val_misclassified_or_low_conf_lt_060.json
+  move_images_immediately: true
+  quarantine_dir: _relabel_deleted
+  side_pose_review:
+    source_label: clear_side_face
+    pose_label: occluded_pose
+    priority_probability_min: 0.20
+    manifest_path: outputs/relabel_review/clear_side_pose_review.json
+  review_filter:
+    splits: [train, val]
+    prediction_head: subtype_4class
+    selection: misclassified_or_low_confidence
+    confidence_max_exclusive: 0.60
