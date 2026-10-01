@@ -26,11 +26,19 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    onnx_path = args.onnx or cfg["export"]["onnx_path"]
+    onnx_path = (
+        args.onnx
+        or cfg.get("export", {}).get("onnx_path")
+        or cfg.get("paths", {}).get("onnx_path")
+    )
+    if not onnx_path:
+        raise KeyError("ONNX path is not configured in export.onnx_path or paths.onnx_path.")
+    class_names = cfg.get("task", {}).get("binary_class_names", cfg["data"]["class_names"])
     classifier = ONNXFaceOcclusionClassifier(
         onnx_path=onnx_path,
         image_size=int(cfg["data"]["image_size"]),
-        class_names=cfg["data"]["class_names"],
+        class_names=class_names,
+        occluded_threshold=float(cfg.get("inference", {}).get("occluded_threshold", 0.5)),
     )
     result = classifier.predict(args.image)
     print(f"class: {result['class_name']}")

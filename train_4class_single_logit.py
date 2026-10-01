@@ -488,7 +488,7 @@ def run_epoch(
     aux_predictions_all = metric_values[3 * count:4 * count]
 
     accuracy, f1 = macro_f1(labels_all, predictions_all, n_classes=2)
-    _, auxiliary_f1 = macro_f1(
+    auxiliary_accuracy, auxiliary_f1 = macro_f1(
         aux_labels_all, aux_predictions_all, n_classes=auxiliary_class_weights.numel()
     )
     return (
@@ -496,6 +496,7 @@ def run_epoch(
         auxiliary_loss_sum / max(1, count),
         accuracy,
         f1,
+        auxiliary_accuracy,
         auxiliary_f1,
     )
 
@@ -655,7 +656,7 @@ def train(config: dict) -> Path:
             raise RuntimeError("Optimizer was not initialized; check stage1_epochs.")
 
         batch_scheduler = scheduler if scheduler_step_type == "batch" else None
-        train_loss, train_aux_loss, train_acc, train_f1, train_aux_f1 = run_epoch(
+        train_loss, train_aux_loss, train_acc, train_f1, train_aux_acc, train_aux_f1 = run_epoch(
             model,
             train_loader,
             device,
@@ -669,7 +670,7 @@ def train(config: dict) -> Path:
             optimizer,
             batch_scheduler,
         )
-        val_loss, val_aux_loss, val_acc, val_f1, val_aux_f1 = run_epoch(
+        val_loss, val_aux_loss, val_acc, val_f1, val_aux_acc, val_aux_f1 = run_epoch(
             model,
             val_loader,
             device,
@@ -712,9 +713,11 @@ def train(config: dict) -> Path:
         print(
             f"Epoch {epoch:03d}/{epochs} [{stage_tag}] lr={learning_rates} | "
             f"train loss={train_loss:.4f} (sub={train_aux_loss:.4f}) "
-            f"acc={train_acc:.3f} F1={train_f1:.3f} subF1={train_aux_f1:.3f} | "
+            f"acc={train_acc:.3f} F1={train_f1:.3f} subAcc={train_aux_acc:.3f} "
+            f"subF1={train_aux_f1:.3f} | "
             f"val loss={val_loss:.4f} (sub={val_aux_loss:.4f}) "
-            f"acc={val_acc:.3f} F1={val_f1:.3f} subF1={val_aux_f1:.3f} | "
+            f"acc={val_acc:.3f} F1={val_f1:.3f} subAcc={val_aux_acc:.3f} "
+            f"subF1={val_aux_f1:.3f} | "
             f"{best_marker} {monitor_label}={displayed_best:.4f} "
             f"(epoch {displayed_best_epoch})"
         )
@@ -723,11 +726,13 @@ def train(config: dict) -> Path:
             "train_loss": train_loss,
             "train_auxiliary_loss": train_aux_loss,
             "train_accuracy": train_acc,
+            "train_auxiliary_accuracy": train_aux_acc,
             "train_macro_f1": train_f1,
             "train_auxiliary_macro_f1": train_aux_f1,
             "val_loss": val_loss,
             "val_auxiliary_loss": val_aux_loss,
             "val_accuracy": val_acc,
+            "val_auxiliary_accuracy": val_aux_acc,
             "val_macro_f1": val_f1,
             "val_auxiliary_macro_f1": val_aux_f1,
             "stage": stage_tag,
@@ -856,9 +861,28 @@ def save_confusion_matrix(report: dict, output_path: Path, title: str, dpi: int)
     plt.close(figure)
 
 
+def save_validation_accuracy_chart(binary_report: dict, subclass_report: dict,
+                                  output_path: Path, dpi: int) -> None:
+    names = ["Clear / occluded (2 classes)", "Subtype (4 classes)"]
+    values = [float(binary_report["accuracy"]), float(subclass_report["accuracy"])]
+    figure, axis = plt.subplots(figsize=(8, 3.5))
+    bars = axis.barh(names, values, color=["#4C78A8", "#F58518"])
+    axis.set_xlim(0, 1)
+    axis.set_xlabel("Validation accuracy")
+    axis.set_title("Best checkpoint validation accuracy")
+    axis.grid(axis="x", alpha=0.25)
+    for bar, value in zip(bars, values):
+        axis.text(min(value + 0.015, 0.94), bar.get_y() + bar.get_height() / 2,
+                  f"{value:.2%}", va="center")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=dpi)
+    plt.close(figure)
+
+
 def save_history_plot(history_path: Path, output_path: Path, title: str,
                       train_loss_key: str, val_loss_key: str,
                       train_f1_key: str, val_f1_key: str,
+                      train_acc_key: str, val_acc_key: str,
                       width: float, height: float, dpi: int) -> None:
     if not history_path.is_file():
         return
@@ -867,7 +891,7 @@ def save_history_plot(history_path: Path, output_path: Path, title: str,
     if not rows:
         return
     epochs = [int(row["epoch"]) for row in rows]
-    figure, axes = plt.subplots(1, 2, figsize=(width, height))
+    figure, axes = plt.subplots(1, 3, figsize=(width * 1.35, height))
     for key, label in ((train_loss_key, "Train"), (val_loss_key, "Validation")):
         if key in rows[0]:
             axes[0].plot(epochs, [float(row[key]) for row in rows], label=label)
@@ -880,6 +904,15 @@ def save_history_plot(history_path: Path, output_path: Path, title: str,
     axes[1].set(title="Macro F1", xlabel="Epoch", ylabel="F1", ylim=(0, 1.02))
     axes[1].grid(alpha=0.25)
     axes[1].legend()
+    if train_acc_key in rows[0] and val_acc_key in rows[0]:
+        axes[2].plot(epochs, [float(row[train_acc_key]) for row in rows], label="Train")
+        axes[2].plot(epochs, [float(row[val_acc_key]) for row in rows], label="Validation")
+        axes[2].legend()
+    else:
+        axes[2].text(0.5, 0.5, "Accuracy history not recorded", ha="center", va="center",
+                     transform=axes[2].transAxes)
+    axes[2].set(title="Accuracy", xlabel="Epoch", ylabel="Accuracy", ylim=(0, 1.02))
+    axes[2].grid(alpha=0.25)
     figure.suptitle(title)
     figure.tight_layout()
     figure.savefig(output_path, dpi=dpi)
@@ -982,6 +1015,9 @@ def evaluate_checkpoint(config: dict, checkpoint_path: Path, output_root: Path) 
     (binary_dir / "metrics.json").write_text(json.dumps(binary_report, indent=2), encoding="utf-8")
     (subclass_dir / "metrics.json").write_text(json.dumps(subclass_report, indent=2), encoding="utf-8")
     plot_cfg = config["evaluation"]["plots"]
+    save_validation_accuracy_chart(binary_report, subclass_report,
+                                   run_dir / "validation_accuracy.png",
+                                   int(plot_cfg["history_dpi"]))
     save_confusion_matrix(binary_report, binary_dir / "confusion_matrix.png",
                           "Validation confusion matrix — 2 classes",
                           int(plot_cfg["confusion_matrix_dpi"]))
@@ -991,11 +1027,13 @@ def evaluate_checkpoint(config: dict, checkpoint_path: Path, output_root: Path) 
     history_path = checkpoint_path.parent / "history.csv"
     save_history_plot(history_path, binary_dir / "training_curves.png", "Main binary task",
                       "train_loss", "val_loss", "train_macro_f1", "val_macro_f1",
+                      "train_accuracy", "val_accuracy",
                       float(plot_cfg["history_width"]), float(plot_cfg["history_height"]),
                       int(plot_cfg["history_dpi"]))
     save_history_plot(history_path, subclass_dir / "training_curves.png", "Auxiliary 4-class task",
                       "train_auxiliary_loss", "val_auxiliary_loss",
                       "train_auxiliary_macro_f1", "val_auxiliary_macro_f1",
+                      "train_auxiliary_accuracy", "val_auxiliary_accuracy",
                       float(plot_cfg["history_width"]), float(plot_cfg["history_height"]),
                       int(plot_cfg["history_dpi"]))
 
@@ -1090,7 +1128,11 @@ def main() -> None:
 
     if args.mode == "train":
         checkpoint_path = train(config)
-        print("Training complete. ONNX was not exported.")
+        if bool(config["paths"].get("auto_export_after_training", True)):
+            onnx_path = export_onnx(config, checkpoint_path)
+            print(f"Updated inference model: {onnx_path}")
+        else:
+            print("Training complete. Automatic ONNX export is disabled.")
         if bool(config["evaluation"].get("auto_evaluate_after_training", True)):
             output_root = Path(config["evaluation"]["output_dir"])
             if not output_root.is_absolute():

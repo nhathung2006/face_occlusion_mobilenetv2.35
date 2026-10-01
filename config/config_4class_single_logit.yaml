@@ -136,6 +136,7 @@ paths:
   best_checkpoint_name: best.pth
   last_checkpoint_name: last.pth
   history_name: history.csv
+  auto_export_after_training: false
   onnx_path: outputs/onnx/face_4class_single_logit.onnx
   onnx_opset: 17
   onnx_dynamic_batch: true

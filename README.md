@@ -91,10 +91,10 @@ python train.py --config config/config.yaml
 
 Outputs:
 
-- `checkpoints/best.pth`
-- `checkpoints/last.pth`
-- `outputs/history.csv`
-- `outputs/plots/*.png`
+- `checkpoints/dataset_hungtn_single_logit/best.pth`
+- `checkpoints/dataset_hungtn_single_logit/last.pth`
+- `outputs/dataset_hungtn_single_logit/history.csv`
+- `outputs/dataset_hungtn_single_logit/plots/*.png`
 
 ## Test
 
@@ -144,17 +144,24 @@ Run the four-label experiment with:
 .\.venv\Scripts\python.exe train_4class_single_logit.py --config config/config_4class_single_logit.yaml --mode train
 ```
 
-When training finishes, the best checkpoint is automatically evaluated by default. A new timestamped
+When training finishes, the best checkpoint is saved and evaluated by default. A new timestamped
 folder is written under `outputs/model_evaluation/` with the 2-class and 4-class metrics, confusion
 matrices, training curves, and misclassified validation images. `latest_evaluation.json` points to
-the newest result folder. Set `evaluation.auto_evaluate_after_training: false` in the config to
-disable this behavior; `--mode evaluate` remains available for a manual evaluation.
+the newest result folder. ONNX export is disabled during configuration experiments. When the model
+configuration is ready, export the selected checkpoint explicitly with `--mode export`; evaluation
+can also be run manually with `--mode evaluate`.
 
 When exporting this four-label checkpoint later with `--mode export`, the ONNX graph returns only
 the binary clear/occluded logit (shape `[batch, 1]`, output name `logit`). It clamps the logit to
 `±training.logit_penalty.max_logit` (currently `3.8918203`) and contains no sigmoid. Training and
 validation still use sigmoid for their loss and metrics; the training penalty is soft, so raw
 PyTorch logits may exceed this bound before export.
+
+Run single-image inference against the 4-class model's exported binary head with:
+
+```powershell
+.\.venv\Scripts\python.exe inference.py path\to\face.jpg --config config/config_4class_single_logit.yaml
+```
 
 ### Train a single-logit clear/occluded model
 
