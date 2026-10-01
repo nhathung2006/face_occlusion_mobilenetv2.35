@@ -114,7 +114,7 @@ Output:
 
 The export keeps a dynamic batch dimension so the later detector pipeline can classify multiple face crops in one inference call.
 
-By default, export uses `checkpoints/last.pth`; pass `--checkpoint` to select another checkpoint. The ONNX input is `images` in NCHW format after RGB resize and ImageNet normalization. The output is raw `logits` (no sigmoid), clamped to `[-3.8918203, 3.8918203]`. Apply sigmoid outside ONNX only when a probability is needed.
+By default, export uses `checkpoints/last.pth`; pass `--checkpoint` to select another checkpoint. The ONNX input is `images` in NCHW format after RGB resize and ImageNet normalization. The output is the raw logit before sigmoid, without clamping. Apply sigmoid outside ONNX only when a probability is needed.
 
 ## Single-image ONNX inference
 
@@ -156,21 +156,24 @@ the binary clear/occluded logit (shape `[batch, 1]`, output name `logit`). It cl
 validation still use sigmoid for their loss and metrics; the training penalty is soft, so raw
 PyTorch logits may exceed this bound before export.
 
-### Train a true two-output clear/occluded model
+### Train a single-logit clear/occluded model
 
 The binary dataset is stored at
 `C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/dataset_hungtn/dataset_hungtn_binary_train_val_v1`.
 Its only class folders are `clear` and `occluded`; the original subclasses are
-retained below those folders only for provenance. The model classifier has two
-output logits and is optimized with cross-entropy loss.
+retained below those folders only for provenance. The classifier outputs one
+raw logit. Focal loss applies sigmoid internally in a numerically stable form;
+training targets use smoothing and a soft logit penalty. Validation uses the
+original hard labels. The exported ONNX model returns the unclamped raw logit;
+apply sigmoid outside the model to get the occluded probability.
 
 ```powershell
 .\.venv\Scripts\python.exe train.py
 ```
 
-`train.py` uses the existing `config/config.yaml` by default, matching the
-training workflow used in commit `a65b172`. Checkpoints are written to
-`checkpoints/best.pth` and `checkpoints/last.pth`.
+`train.py` uses the existing `config/config.yaml` by default. Checkpoints and
+training/evaluation outputs are kept under `checkpoints/dataset_hungtn_single_logit/`
+and `outputs/dataset_hungtn_single_logit/`, preserving the saved two-logit run.
 
 ## Matched auxiliary-loss experiments
 

@@ -226,7 +226,7 @@ def main():
                 device,
                 num_classes,
                 label_smoothing=0.0,
-                target_smoothing_enabled=ts_enabled,
+                target_smoothing_enabled=False,
                 target_low=ts_low,
                 target_high=ts_high,
                 positive_threshold=occluded_threshold,
@@ -321,7 +321,7 @@ def main():
         lr_str = f"LR(BB: {bb_lr:.6f}, Clf: {clf_lr:.6f})" if len(optimizer.param_groups) > 1 else f"LR: {clf_lr:.6f}"
         print(
             f"Epoch {epoch:03d}/{total_epochs:03d} [{stage_tag}] | "
-            f"Train [Loss: {train_loss:.4f}, BCE: {train_details['classification_loss']:.4f}, Penalty: {train_details['logit_penalty']:.4f}, "
+            f"Train [Loss: {train_loss:.4f}, Classification: {train_details['classification_loss']:.4f}, Penalty: {train_details['logit_penalty']:.4f}, "
             f"Acc: {train_m.accuracy:.4f}, Prec: {train_m.precision:.4f}, Rec: {train_m.recall:.4f}, F1: {train_m.f1:.4f}] | "
             f"Val [Loss: {val_loss:.4f}, Penalty: {val_details['logit_penalty']:.4f}, "
             f"Acc: {val_m.accuracy:.4f}, Prec: {val_m.precision:.4f}, Rec: {val_m.recall:.4f}, F1: {val_m.f1:.4f}] | "

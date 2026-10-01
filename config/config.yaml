@@ -1,8 +1,8 @@
 model:
   name: mobilenetv2
   width_mult: 0.35
-  num_classes: 2
-  dropout: 0.3
+  num_classes: 1
+  dropout: 0.35
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
@@ -43,7 +43,7 @@ training:
     monitor: val_loss             # Theo dõi validation loss
     mode: min                     # Giảm khi loss không giảm
     factor: 0.50                  # Giảm 50% LR nếu không cải thiện
-    patience: 6                   # Giảm LR nếu val_loss chững lại sau 8 epoch
+    patience: 8                   # Giảm LR nếu val_loss chững lại sau 8 epoch
     min_lr: 0.000001              # Tốc độ học nhỏ nhất (1e-6)
     threshold: 0.0005             # Ngưỡng cải thiện tối thiểu
     cooldown: 1                   # Số epoch chờ trước khi bắt đầu đếm patience mới
@@ -51,7 +51,7 @@ training:
   cosine:
     eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6) khi dùng cosine
 
-  loss_type: cross_entropy         # CrossEntropyLoss cho hai logits: clear và occluded
+  loss_type: focal                 # Focal Loss trên raw logit; sigmoid nằm trong loss
   focal:
     gamma: 1.0                    # Hệ số focusing (gamma = 1.0)
     alpha: 0.0                    # 0.0 (unweighted alpha)
@@ -66,21 +66,21 @@ training:
 
   logit_penalty:
     enabled: true                 # Bật hàm phạt biên độ logit (chống nổ logit, tối ưu hóa Quantize INT8)
-    max_logit: 3.8918203           # logit(0.98), tương ứng sigmoid trong khoảng [0.02, 0.98]
+    max_logit: 3.90                # Ngưỡng penalty mềm, không cắt logits khi export
     margin_weight: 0.05           # Phạt khi logit vượt quá +/- 3.90 (Relu(|logit| - 3.9)^2)
-    l2_weight: 0.0                # Tắt L2 để không kéo logits về 0 (sigmoid=0.5)
+    l2_weight: 0.001              # Regularize nhẹ độ lớn logits
 
   early_stopping:
     enabled: true
-    patience: 16                  # Dừng training sau 16 epoch không cải thiện val_f1
-    monitor: val_f1               # Chọn checkpoint theo macro F1 trên validation
-    mode: max                     # F1 càng cao càng tốt
-    min_delta: 0.0005             # Mức tăng F1 tối thiểu được tính là cải thiện
+    patience: 16                  # Dừng training sau 16 epoch không cải thiện val_loss
+    monitor: val_loss             # Chọn checkpoint theo validation loss
+    mode: min                     # Loss càng thấp càng tốt
+    min_delta: 0.0005             # Mức giảm loss tối thiểu được tính là cải thiện
     restore_best_weights: true    # Tự động khôi phục weights tốt nhất khi dừng hoặc kết thúc
 
 augmentation:
   horizontal_flip: 0.50
-  rotation_degrees: 0.0
+  rotation_degrees: 15
   brightness: 0.20
   contrast: 0.20
   saturation: 0.20
@@ -88,18 +88,21 @@ augmentation:
   gaussian_noise_std: 0.00
 
 checkpoint:
-  best_path: checkpoints/best.pth
-  last_path: checkpoints/last.pth
+  best_path: checkpoints/dataset_hungtn_single_logit/best.pth
+  last_path: checkpoints/dataset_hungtn_single_logit/last.pth
+
+outputs:
+  root: outputs/dataset_hungtn_single_logit
 
 export:
-  onnx_path: outputs/onnx/mobilenetv2_035_face_occlusion.onnx
+  onnx_path: outputs/dataset_hungtn_single_logit/mobilenetv2_035_face_occlusion_logit.onnx
   opset: 17
   dynamic_batch: true
 
 evaluation:
   enabled: true
   split: val
-  misclassified_dir: outputs/misclassified_val
+  output_dir: outputs/dataset_hungtn_single_logit/evaluation
   use_tta: false                  # Bật/tắt Test-Time Augmentation (2-pass Horizontal Flip) khi test/eval
 
 inference:

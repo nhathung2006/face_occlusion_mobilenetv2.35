@@ -151,7 +151,7 @@ def evaluate_dataset_dir(
     criterion = build_loss_criterion(cfg, device)
     criterion.eval()
     target_smoothing_cfg = cfg.get("training", {}).get("target_smoothing", {})
-    target_smoothing_enabled = bool(target_smoothing_cfg.get("enabled", False))
+    target_smoothing_enabled = False
     target_low = float(target_smoothing_cfg.get("target_low", 0.02))
     target_high = float(target_smoothing_cfg.get("target_high", 0.98))
     total_loss = 0.0
@@ -233,7 +233,7 @@ def evaluate_dataset_dir(
     print("=" * 65)
     print(f"TTA Enabled:         {use_tta}")
     print(f"Total Samples:       {len(y_true)}")
-    print(f"Cross-Entropy Loss:  {avg_loss:.4f}")
+    print(f"Evaluation Loss:     {avg_loss:.4f}")
     print(f"Overall Accuracy:    {acc * 100:.2f}%")
     print(f"Macro Precision:     {macro_precision * 100:.2f}%")
     print(f"Macro Recall:        {macro_recall * 100:.2f}%")

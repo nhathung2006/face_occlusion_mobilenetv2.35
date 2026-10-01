@@ -176,7 +176,7 @@ def run_epoch(
             if num_classes == 1:
                 logits = logits.view(-1)
                 targets_float = targets.float()
-                if target_smoothing_enabled:
+                if training and target_smoothing_enabled:
                     targets_loss = apply_target_smoothing(targets_float, target_low, target_high)
                 elif training and label_smoothing > 0.0:
                     targets_loss = targets_float * (1.0 - label_smoothing) + 0.5 * label_smoothing
@@ -198,6 +198,8 @@ def run_epoch(
                 batch_max_abs_logit = float(logits.detach().abs().max().item())
                 max_abs_logit = max(max_abs_logit, batch_max_abs_logit)
                 logit_count += logits.numel()
+                # Loss consumes raw logits through BCEWithLogits; sigmoid is
+                # fused into that loss and used here for probabilities/metrics.
                 probs = torch.sigmoid(logits)
                 preds = (probs >= positive_threshold).long()
 
