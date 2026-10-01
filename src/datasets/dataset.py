@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -7,6 +9,9 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.transforms import InterpolationMode
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 class AddGaussianNoise:
@@ -17,6 +22,58 @@ class AddGaussianNoise:
         if self.std <= 0:
             return tensor
         return torch.clamp(tensor + torch.randn_like(tensor) * self.std, 0.0, 1.0)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_split_manifest(cfg: dict) -> None:
+    """Verify an optional frozen train/val manifest before loading images."""
+    manifest_value = cfg.get("data", {}).get("manifest_path")
+    if not manifest_value:
+        return
+    root = Path(cfg["data"]["root"]).resolve()
+    manifest_path = Path(manifest_value).resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    class_names = list(cfg["data"]["class_names"])
+    if manifest.get("class_names") != class_names:
+        raise ValueError("Dataset manifest class order does not match data.class_names.")
+
+    expected_paths: set[Path] = set()
+    for record in manifest.get("images", []):
+        split = record.get("split")
+        class_name = record.get("class_name")
+        relative = Path(record.get("path", ""))
+        if split not in ("train", "val") or class_name not in class_names:
+            raise ValueError(f"Invalid dataset manifest record: {record}")
+        if relative.is_absolute() or not relative.parts or relative.parts[0] != class_name:
+            raise ValueError(f"Invalid manifest image path: {relative}")
+        path = (root / split / relative).resolve()
+        class_root = (root / split / class_name).resolve()
+        if not path.is_relative_to(class_root):
+            raise ValueError(f"Manifest image escapes its class folder: {path}")
+        if path in expected_paths or not path.is_file():
+            raise ValueError(f"Missing or duplicate manifest image: {path}")
+        if _file_sha256(path) != record.get("sha256"):
+            raise ValueError(f"Dataset image changed after split creation: {path}")
+        expected_paths.add(path)
+
+    actual_paths = {
+        path.resolve()
+        for split in ("train", "val")
+        for class_name in class_names
+        for path in (root / split / class_name).rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    }
+    if actual_paths != expected_paths:
+        raise ValueError("Dataset folders contain images missing from the frozen manifest.")
 
 
 def build_eval_transform(image_size: int):
@@ -65,6 +122,7 @@ def build_transforms(cfg: dict):
 
 
 def build_datasets(cfg: dict):
+    validate_split_manifest(cfg)
     root = Path(cfg["data"]["root"])
     train_tf, eval_tf = build_transforms(cfg)
 

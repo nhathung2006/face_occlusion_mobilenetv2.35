@@ -1,14 +1,15 @@
 model:
   name: mobilenetv2
   width_mult: 0.35
-  num_classes: 1
+  num_classes: 2
   dropout: 0.3
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
   freeze_backbone_epochs: 0
 
 data:
-  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/Face/face_occlusion_mobilenetv2/face_occlusion_mobilenetv2/dataset"
+  root: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/dataset_hungtn/dataset_hungtn_binary_train_val_v1"
+  manifest_path: "C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/dataset_hungtn/dataset_hungtn_binary_train_val_v1/binary_manifest.json"
   image_size: 112
   batch_size: 64
   num_workers: 2
@@ -50,7 +51,7 @@ training:
   cosine:
     eta_min: 0.000001             # Tốc độ học nhỏ nhất (1e-6) khi dùng cosine
 
-  loss_type: bce                   # BCEWithLogitsLoss nhận raw logits; sigmoid nằm bên trong loss
+  loss_type: cross_entropy         # CrossEntropyLoss cho hai logits: clear và occluded
   focal:
     gamma: 1.0                    # Hệ số focusing (gamma = 1.0)
     alpha: 0.0                    # 0.0 (unweighted alpha)

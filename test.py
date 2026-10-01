@@ -46,7 +46,10 @@ class ExplicitClassImageDataset(torch.utils.data.Dataset):
             if not cls_dir.exists():
                 continue
             idx = self.class_to_idx[cls_name]
-            for img_path in sorted(cls_dir.iterdir()):
+            # Keep provenance subfolders (for example
+            # clear/clear_full_face/...) while treating the configured direct
+            # children of ``root`` as the only classification labels.
+            for img_path in sorted(cls_dir.rglob("*")):
                 if img_path.is_file() and img_path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.samples.append((str(img_path), idx))
 

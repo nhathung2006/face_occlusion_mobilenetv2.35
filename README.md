@@ -156,6 +156,22 @@ the binary clear/occluded logit (shape `[batch, 1]`, output name `logit`). It cl
 validation still use sigmoid for their loss and metrics; the training penalty is soft, so raw
 PyTorch logits may exceed this bound before export.
 
+### Train a true two-output clear/occluded model
+
+The binary dataset is stored at
+`C:/Thực tập LUMI/model_BaiToan/Deepleaning/data/dataset_hungtn/dataset_hungtn_binary_train_val_v1`.
+Its only class folders are `clear` and `occluded`; the original subclasses are
+retained below those folders only for provenance. The model classifier has two
+output logits and is optimized with cross-entropy loss.
+
+```powershell
+.\.venv\Scripts\python.exe train.py
+```
+
+`train.py` uses the existing `config/config.yaml` by default, matching the
+training workflow used in commit `a65b172`. Checkpoints are written to
+`checkpoints/best.pth` and `checkpoints/last.pth`.
+
 ## Matched auxiliary-loss experiments
 
 Experiment settings are in `experiments` in `config/config_4class_single_logit.yaml`.
