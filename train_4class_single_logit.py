@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import random
+import shutil
 import sys
 from pathlib import Path
 
@@ -392,6 +393,31 @@ def macro_f1(labels: list[int], predictions: list[int], n_classes: int) -> tuple
     return accuracy, sum(class_scores) / n_classes
 
 
+def build_auxiliary_class_weights(
+    train_counts: torch.Tensor,
+    weighting: str,
+) -> torch.Tensor:
+    """Build four-class CE weights from training counts only."""
+    if train_counts.ndim != 1 or train_counts.numel() == 0:
+        raise ValueError("train_counts must be a non-empty one-dimensional tensor.")
+    if torch.any(train_counts <= 0):
+        raise ValueError("Every auxiliary class must have at least one training image.")
+
+    mode = str(weighting).strip().lower()
+    if mode == "inverse_frequency":
+        return train_counts.sum() / (train_counts.numel() * train_counts)
+    if mode == "inverse_sqrt_frequency":
+        # A common scale factor does not change weighted CE with mean reduction.
+        # Normalize to the first configured class so the logged values are easy
+        # to interpret (clear_full_face is 1.0 in the current configuration).
+        weights = train_counts.rsqrt()
+        return weights / weights[0]
+    raise ValueError(
+        "Supported auxiliary_class_weighting values: "
+        "inverse_frequency, inverse_sqrt_frequency"
+    )
+
+
 def run_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -507,6 +533,7 @@ def checkpoint_payload(
     epoch: int,
     val_f1: float,
     split_counts: dict,
+    auxiliary_class_weights: torch.Tensor,
 ) -> dict:
     return {
         "model_state_dict": model.state_dict(),
@@ -515,6 +542,8 @@ def checkpoint_payload(
         "subclass_to_binary": subclass_to_binary_ids(config),
         "binary_threshold": float(config["inference"]["occluded_threshold"]),
         "auxiliary_loss_weight": float(config["training"]["auxiliary_loss_weight"]),
+        "auxiliary_class_weighting": str(config["training"]["auxiliary_class_weighting"]),
+        "auxiliary_class_weights": auxiliary_class_weights.detach().cpu().tolist(),
         "width_mult": float(config["model"]["width_mult"]),
         "dropout": float(config["model"]["dropout"]),
         "image_size": int(config["data"]["image_size"]),
@@ -576,15 +605,27 @@ def train(config: dict) -> Path:
         dtype=torch.float32,
         device=device,
     )
-    if config["training"]["auxiliary_class_weighting"] != "inverse_frequency":
-        raise ValueError("Currently supported auxiliary_class_weighting: inverse_frequency")
-    auxiliary_class_weights = train_counts.sum() / (len(class_names) * train_counts)
+    auxiliary_weighting = str(config["training"]["auxiliary_class_weighting"])
+    auxiliary_class_weights = build_auxiliary_class_weights(
+        train_counts,
+        auxiliary_weighting,
+    )
     binary_threshold = float(config["inference"]["occluded_threshold"])
     subclass_to_binary = subclass_to_binary_ids(config)
     print("Main task: 0=clear, 1=occluded; auxiliary labels: " + ", ".join(
         f"{index}={name}" for index, name in enumerate(class_names)
     ))
     print(f"Auxiliary loss weight: {auxiliary_loss_weight:g}")
+    print(f"Auxiliary class weighting: {auxiliary_weighting}")
+    for class_name, class_count, class_weight in zip(
+        class_names,
+        train_counts.detach().cpu().tolist(),
+        auxiliary_class_weights.detach().cpu().tolist(),
+    ):
+        print(
+            f"  {class_name}: train={int(class_count)} "
+            f"weight={class_weight:.6f}"
+        )
     model = build_model(config, load_pretrained=True).to(device)
     train_cfg = config["training"]
     epochs = int(train_cfg["epochs"])
@@ -613,7 +654,6 @@ def train(config: dict) -> Path:
         checkpoint_dir = PROJECT_ROOT / checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     best_path = checkpoint_dir / config["paths"]["best_checkpoint_name"]
-    last_path = checkpoint_dir / config["paths"]["last_checkpoint_name"]
     history_path = checkpoint_dir / config["paths"]["history_name"]
     history: list[dict] = []
     best_f1 = float("inf") if early_mode == "min" else float("-inf")
@@ -744,8 +784,14 @@ def train(config: dict) -> Path:
             writer.writeheader()
             writer.writerows(history)
 
-        payload = checkpoint_payload(model, config, epoch, val_f1, split_counts)
-        torch.save(payload, last_path)
+        payload = checkpoint_payload(
+            model,
+            config,
+            epoch,
+            val_f1,
+            split_counts,
+            auxiliary_class_weights,
+        )
         if improved:
             best_f1, best_epoch, waiting = monitored_value, epoch, 0
             torch.save(payload, best_path)
@@ -1006,9 +1052,19 @@ def evaluate_checkpoint(config: dict, checkpoint_path: Path, output_root: Path) 
 
     binary_report = classification_report(binary_truth, binary_pred, binary_names)
     subclass_report = classification_report(subclass_truth, subclass_pred, subclass_names)
-    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"checkpoint_epoch_{int(payload.get('epoch', 0)):03d}_{run_timestamp}"
-    run_dir = output_root / run_name
+    # This directory always represents the current best checkpoint. Remove only
+    # evaluator-owned entries so stale plots/error pages cannot survive a rerun.
+    run_dir = output_root
+    run_dir.mkdir(parents=True, exist_ok=True)
+    for generated_dir in (run_dir / "binary_2class", run_dir / "subtype_4class"):
+        if generated_dir.exists():
+            shutil.rmtree(generated_dir)
+    for generated_file in (
+        run_dir / "validation_accuracy.png",
+        run_dir / "evaluation_summary.json",
+        run_dir / "latest_evaluation.json",
+    ):
+        generated_file.unlink(missing_ok=True)
     binary_dir, subclass_dir = run_dir / "binary_2class", run_dir / "subtype_4class"
     binary_dir.mkdir(parents=True, exist_ok=True)
     subclass_dir.mkdir(parents=True, exist_ok=True)
@@ -1077,11 +1133,10 @@ def evaluate_checkpoint(config: dict, checkpoint_path: Path, output_root: Path) 
         "checkpoint_epoch": int(payload.get("epoch", 0)),
         "updated_at": datetime.now().astimezone().isoformat(),
     }
-    output_root.mkdir(parents=True, exist_ok=True)
-    (output_root / "latest_evaluation.json").write_text(
+    (run_dir / "latest_evaluation.json").write_text(
         json.dumps(latest_pointer, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"Evaluation output: {run_dir.resolve()}")
+    print(f"Best-checkpoint evaluation output: {run_dir.resolve()}")
     print(f"Binary: accuracy={binary_report['accuracy']:.4f}, macro-F1={binary_report['macro_f1']:.4f}, errors={len(binary_errors)}")
     print(f"4-class: accuracy={subclass_report['accuracy']:.4f}, macro-F1={subclass_report['macro_f1']:.4f}, errors={len(subclass_errors)}")
     print(f"Prediction disagreements between binary and grouped 4-class heads: {summary['binary_subclass_prediction_disagreements']}")

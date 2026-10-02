@@ -4,7 +4,7 @@
 model:
   name: mobilenetv2
   width_mult: 0.35
-  dropout: 0.3
+  dropout: 0.4
   pretrained: true
   pretrained_path: weights/mobilenetv2_0.35-b2e15951.pth
 
@@ -47,7 +47,8 @@ training:
   weight_decay: 0.0005
   # Best binary val macro-F1 among 0.00/0.15/0.30 on the 20260928 grouped split.
   auxiliary_loss_weight: 0.30
-  auxiliary_class_weighting: inverse_frequency
+  # Compute mild four-class CE weights from the training split only: 1/sqrt(n_c).
+  auxiliary_class_weighting: inverse_sqrt_frequency
   auxiliary_label_smoothing: 0.00
 
   two_stage:
@@ -109,7 +110,8 @@ runtime:
   evaluation_device: cpu
 
 evaluation:
-  output_dir: outputs/model_evaluation
+  # Replaced after every training run with metrics/images from best.pth.
+  output_dir: outputs/4_class
   auto_evaluate_after_training: true
   batch_size: 64
   contact_sheet:
@@ -132,9 +134,9 @@ experiments:
   near_duplicate_phash_distance: 4
 
 paths:
-  checkpoint_dir: checkpoints/4class_config_yaml
+  # Keep this trial separate so the current inverse-frequency checkpoints remain intact.
+  checkpoint_dir: checkpoints/4class_inverse_sqrt_wce
   best_checkpoint_name: best.pth
-  last_checkpoint_name: last.pth
   history_name: history.csv
   auto_export_after_training: false
   onnx_path: outputs/onnx/face_4class_single_logit.onnx

@@ -144,10 +144,11 @@ Run the four-label experiment with:
 .\.venv\Scripts\python.exe train_4class_single_logit.py --config config/config_4class_single_logit.yaml --mode train
 ```
 
-When training finishes, the best checkpoint is saved and evaluated by default. A new timestamped
-folder is written under `outputs/model_evaluation/` with the 2-class and 4-class metrics, confusion
-matrices, training curves, and misclassified validation images. `latest_evaluation.json` points to
-the newest result folder. ONNX export is disabled during configuration experiments. When the model
+When training finishes, only the best checkpoint is used for automatic evaluation. The generated
+2-class and 4-class metrics, confusion matrices, training curves, and misclassified validation
+images are replaced directly under `outputs/4_class/`; stale error pages from the previous run are
+removed first. `latest_evaluation.json` records the exact `best.pth` path and epoch used. ONNX export
+is disabled during configuration experiments. When the model
 configuration is ready, export the selected checkpoint explicitly with `--mode export`; evaluation
 can also be run manually with `--mode evaluate`.
 
