@@ -38,6 +38,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Export device: auto, cuda, or cpu (default: auto).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -45,14 +50,29 @@ def main():
     onnx_path = Path(cfg["export"]["onnx_path"])
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
 
-    model = build_model(cfg).cpu().eval()
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    requested_device = str(args.device).lower()
+    if requested_device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(requested_device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(
+                "ONNX export requested CUDA, but torch.cuda.is_available() is false."
+            )
+    print(f"ONNX export device: {device}")
+    if device.type == "cuda":
+        print(f"CUDA device: {torch.cuda.get_device_name(device)}")
+
+    model = build_model(cfg).to(device).eval()
+    ckpt = torch.load(ckpt_path, map_location=device)
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     model.load_state_dict(state)
-    export_model = model.cpu().eval()
+    export_model = model.to(device).eval()
 
     image_size = int(cfg["data"]["image_size"])
-    dummy = torch.randn(1, 3, image_size, image_size)
+    dummy = torch.randn(1, 3, image_size, image_size, device=device)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
     dynamic_axes = None
     if bool(cfg["export"]["dynamic_batch"]):
@@ -72,6 +92,8 @@ def main():
         torch.onnx.export(export_model, dummy, onnx_path, dynamo=False, **kwargs)
     except TypeError:
         torch.onnx.export(export_model, dummy, onnx_path, **kwargs)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
     print(f"Exported: {onnx_path}")
     print(f"Checkpoint: {ckpt_path}")

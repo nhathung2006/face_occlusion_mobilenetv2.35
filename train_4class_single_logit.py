@@ -284,12 +284,23 @@ def make_transforms(config: dict):
 class BinaryWithSubtypeAuxiliary(nn.Module):
     """One binary head plus a four-way auxiliary head used only during training."""
 
-    def __init__(self, backbone: nn.Module, dropout: float, auxiliary_classes: int):
+    def __init__(
+        self,
+        backbone: nn.Module,
+        dropout: float,
+        auxiliary_classes: int,
+        binary_logit_limit: float | None = None,
+    ):
         super().__init__()
         self.features = backbone.features
         self.conv = backbone.conv
         self.avgpool = backbone.avgpool
         self.classifier = backbone.classifier
+        self.binary_logit_limit = (
+            float(binary_logit_limit) if binary_logit_limit is not None else None
+        )
+        if self.binary_logit_limit is not None and self.binary_logit_limit <= 0:
+            raise ValueError("binary_logit_limit must be positive when enabled.")
         self.classifier_aux = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(self.classifier[-1].in_features, auxiliary_classes),
@@ -303,7 +314,14 @@ class BinaryWithSubtypeAuxiliary(nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.shared_features(images)
-        return self.classifier(features), self.classifier_aux(features)
+        binary_logits = self.classifier(features)
+        # Keep the model's single scalar output in a finite, quantization-safe
+        # range while retaining a differentiable path for training.  With
+        # max_logit=3.8918203, sigmoid(logit) is strictly between 0.02 and 0.98.
+        if self.binary_logit_limit is not None:
+            limit = self.binary_logit_limit
+            binary_logits = limit * torch.tanh(binary_logits / limit)
+        return binary_logits, self.classifier_aux(features)
 
 
 def build_model(config: dict, load_pretrained: bool = True) -> nn.Module:
@@ -327,10 +345,17 @@ def build_model(config: dict, load_pretrained: bool = True) -> nn.Module:
         nn.Dropout(p=float(model_cfg["dropout"])),
         nn.Linear(in_features, 1),
     )
+    logit_penalty_cfg = config.get("training", {}).get("logit_penalty", {})
+    binary_logit_limit = (
+        float(logit_penalty_cfg["max_logit"])
+        if bool(logit_penalty_cfg.get("bounded_output", False))
+        else None
+    )
     return BinaryWithSubtypeAuxiliary(
         model,
         dropout=float(model_cfg["dropout"]),
         auxiliary_classes=len(config["data"]["class_names"]),
+        binary_logit_limit=binary_logit_limit,
     )
 
 
@@ -474,7 +499,7 @@ def run_epoch(
                 max_logit = float(logit_penalty_cfg["max_logit"])
                 margin_weight = float(logit_penalty_cfg["margin_weight"])
                 l2_weight = float(logit_penalty_cfg["l2_weight"])
-                if margin_weight > 0:
+                if margin_weight > 0 and not bool(logit_penalty_cfg.get("bounded_output", False)):
                     excess = F.relu(logits.abs() - max_logit)
                     loss = loss + margin_weight * excess.square().mean()
                 if l2_weight > 0:
@@ -535,6 +560,7 @@ def checkpoint_payload(
     split_counts: dict,
     auxiliary_class_weights: torch.Tensor,
 ) -> dict:
+    logit_penalty_cfg = config["training"].get("logit_penalty", {})
     return {
         "model_state_dict": model.state_dict(),
         "class_names": list(config["data"]["class_names"]),
@@ -544,6 +570,12 @@ def checkpoint_payload(
         "auxiliary_loss_weight": float(config["training"]["auxiliary_loss_weight"]),
         "auxiliary_class_weighting": str(config["training"]["auxiliary_class_weighting"]),
         "auxiliary_class_weights": auxiliary_class_weights.detach().cpu().tolist(),
+        "binary_logit_bounded": bool(logit_penalty_cfg.get("bounded_output", False)),
+        "binary_logit_limit": (
+            float(logit_penalty_cfg["max_logit"])
+            if logit_penalty_cfg.get("max_logit") is not None
+            else None
+        ),
         "width_mult": float(config["model"]["width_mult"]),
         "dropout": float(config["model"]["dropout"]),
         "image_size": int(config["data"]["image_size"]),
@@ -617,6 +649,15 @@ def train(config: dict) -> Path:
     ))
     print(f"Auxiliary loss weight: {auxiliary_loss_weight:g}")
     print(f"Auxiliary class weighting: {auxiliary_weighting}")
+    if bool(logit_penalty_cfg.get("bounded_output", False)):
+        max_logit = float(logit_penalty_cfg["max_logit"])
+        low_probability = float(torch.sigmoid(torch.tensor(-max_logit)))
+        high_probability = float(torch.sigmoid(torch.tensor(max_logit)))
+        print(
+            "Binary output: one bounded scalar logit, no sigmoid in the model; "
+            f"range=(-{max_logit:g}, {max_logit:g}), "
+            f"sigmoid range=({low_probability:.6f}, {high_probability:.6f})"
+        )
     for class_name, class_count, class_weight in zip(
         class_names,
         train_counts.detach().cpu().tolist(),
@@ -810,13 +851,34 @@ def train(config: dict) -> Path:
     return best_path
 
 
-def export_onnx(config: dict, checkpoint_path: Path) -> Path:
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+def export_onnx(
+    config: dict,
+    checkpoint_path: Path,
+    device_override: str | None = None,
+) -> Path:
+    runtime_cfg = config.get("runtime", {})
+    configured_device = str(
+        device_override or runtime_cfg.get("export_device", "auto")
+    ).lower()
+    if configured_device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(configured_device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(
+                "ONNX export requested CUDA, but torch.cuda.is_available() is false."
+            )
+
+    print(f"ONNX export device: {device}")
+    if device.type == "cuda":
+        print(f"CUDA device: {torch.cuda.get_device_name(device)}")
+
+    payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if payload.get("class_names") != list(config["data"]["class_names"]):
         raise ValueError("Checkpoint class order does not match this config.")
     if payload.get("binary_class_names") != list(config["task"]["binary_class_names"]):
         raise ValueError("Checkpoint does not contain the expected binary clear/occluded task.")
-    model = build_model(config, load_pretrained=False)
+    model = build_model(config, load_pretrained=False).to(device)
     model.load_state_dict(payload["model_state_dict"], strict=True)
     model.eval()
     max_logit = float(config["training"]["logit_penalty"]["max_logit"])
@@ -833,13 +895,15 @@ def export_onnx(config: dict, checkpoint_path: Path) -> Path:
             binary_logits, _ = self.trained_model(images)
             return torch.clamp(binary_logits, min=-self.limit, max=self.limit)
 
-    export_model = BinaryLogitOnly(model, max_logit).eval()
+    export_model = BinaryLogitOnly(model, max_logit).to(device).eval()
     output_path = Path(config["paths"]["onnx_path"])
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     size = int(payload["image_size"])
-    dummy = torch.zeros(1, 3, size, size, dtype=torch.float32)
+    dummy = torch.zeros(1, 3, size, size, dtype=torch.float32, device=device)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
     torch.onnx.export(
         export_model,
         dummy,
@@ -856,10 +920,15 @@ def export_onnx(config: dict, checkpoint_path: Path) -> Path:
         ),
         dynamo=False,
     )
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
     import onnx
 
     onnx.checker.check_model(onnx.load(str(output_path)))
-    print(f"ONNX (scalar logit clamped to [-{max_logit}, {max_logit}], no sigmoid): {output_path}")
+    print(
+        f"ONNX (scalar logit clamped to [-{max_logit}, {max_logit}], "
+        f"no sigmoid): {output_path}"
+    )
     return output_path
 
 
@@ -1161,6 +1230,11 @@ def main() -> None:
     )
     parser.add_argument("--check-data", action="store_true", help="Print the deterministic 80/20 split and exit.")
     parser.add_argument("--checkpoint", type=Path, default=None, help="Checkpoint to export in --mode export; defaults to the best checkpoint.")
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="ONNX export device override, e.g. cuda or cpu; default comes from runtime.export_device.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None, help="Evaluation output root for --mode evaluate.")
     args = parser.parse_args()
     config_path = args.config.resolve()
@@ -1205,7 +1279,7 @@ def main() -> None:
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     if args.mode == "export":
-        export_onnx(config, checkpoint_path)
+        export_onnx(config, checkpoint_path, device_override=args.device)
     else:
         output_root = args.output_dir or Path(config["evaluation"]["output_dir"])
         if not output_root.is_absolute():

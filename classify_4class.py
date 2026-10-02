@@ -28,12 +28,23 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 class BinaryWithSubtypeAuxiliary(nn.Module):
-    def __init__(self, backbone: nn.Module, dropout: float, auxiliary_classes: int):
+    def __init__(
+        self,
+        backbone: nn.Module,
+        dropout: float,
+        auxiliary_classes: int,
+        binary_logit_limit: float | None = None,
+    ):
         super().__init__()
         self.features = backbone.features
         self.conv = backbone.conv
         self.avgpool = backbone.avgpool
         self.classifier = backbone.classifier
+        self.binary_logit_limit = (
+            float(binary_logit_limit) if binary_logit_limit is not None else None
+        )
+        if self.binary_logit_limit is not None and self.binary_logit_limit <= 0:
+            raise ValueError("binary_logit_limit must be positive when enabled.")
         self.classifier_aux = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(self.classifier[-1].in_features, auxiliary_classes),
@@ -47,7 +58,11 @@ class BinaryWithSubtypeAuxiliary(nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.shared_features(images)
-        return self.classifier(features), self.classifier_aux(features)
+        binary_logits = self.classifier(features)
+        if self.binary_logit_limit is not None:
+            limit = self.binary_logit_limit
+            binary_logits = limit * torch.tanh(binary_logits / limit)
+        return binary_logits, self.classifier_aux(features)
 
 
 def build_4class_model(checkpoint_path: Path, device: torch.device):
@@ -55,6 +70,9 @@ def build_4class_model(checkpoint_path: Path, device: torch.device):
     class_names = ckpt.get("class_names", ["clear_full_face", "clear_side_face", "occluded_object", "occluded_pose"])
     width = float(ckpt.get("width_mult", 0.35))
     dropout = float(ckpt.get("dropout", 0.3))
+    binary_logit_limit = ckpt.get("binary_logit_limit", 3.8918203)
+    if binary_logit_limit is not None:
+        binary_logit_limit = float(binary_logit_limit)
     image_size = int(ckpt.get("image_size", 112))
     mean = tuple(ckpt.get("normalization_mean", (0.485, 0.456, 0.406)))
     std = tuple(ckpt.get("normalization_std", (0.229, 0.224, 0.225)))
@@ -64,7 +82,12 @@ def build_4class_model(checkpoint_path: Path, device: torch.device):
         nn.Dropout(p=dropout),
         nn.Linear(base.classifier.in_features, 1),
     )
-    model = BinaryWithSubtypeAuxiliary(base, dropout=dropout, auxiliary_classes=len(class_names))
+    model = BinaryWithSubtypeAuxiliary(
+        base,
+        dropout=dropout,
+        auxiliary_classes=len(class_names),
+        binary_logit_limit=binary_logit_limit,
+    )
     state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
     model.load_state_dict(state_dict, strict=True)
     model.to(device)

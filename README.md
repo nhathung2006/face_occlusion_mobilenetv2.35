@@ -149,14 +149,22 @@ When training finishes, only the best checkpoint is used for automatic evaluatio
 images are replaced directly under `outputs/4_class/`; stale error pages from the previous run are
 removed first. `latest_evaluation.json` records the exact `best.pth` path and epoch used. ONNX export
 is disabled during configuration experiments. When the model
-configuration is ready, export the selected checkpoint explicitly with `--mode export`; evaluation
-can also be run manually with `--mode evaluate`.
+configuration is ready, export the selected checkpoint explicitly with `--mode export`; export uses
+`runtime.export_device` and prefers CUDA when set to `auto`. You can override it with
+`--device cuda` or `--device cpu`. Evaluation can also be run manually with `--mode evaluate`.
+
+For the current best four-class checkpoint, export on CUDA with:
+
+```powershell
+.\.venv\Scripts\python.exe train_4class_single_logit.py --config config/config_4class_single_logit.yaml --mode export --checkpoint checkpoints/4class_inverse_sqrt_wce/best.pth --device cuda
+```
 
 When exporting this four-label checkpoint later with `--mode export`, the ONNX graph returns only
 the binary clear/occluded logit (shape `[batch, 1]`, output name `logit`). It clamps the logit to
-`±training.logit_penalty.max_logit` (currently `3.8918203`) and contains no sigmoid. Training and
-validation still use sigmoid for their loss and metrics; the training penalty is soft, so raw
-PyTorch logits may exceed this bound before export.
+`±training.logit_penalty.max_logit` (currently `3.8918203`) and contains no sigmoid. With
+`bounded_output: true`, the PyTorch model also returns this bounded scalar during training and
+validation; sigmoid is used only by the loss/metrics code and by the inference wrapper when a
+probability is needed. Therefore probabilities stay strictly inside approximately `[0.02, 0.98]`.
 
 Run single-image inference against the 4-class model's exported binary head with:
 

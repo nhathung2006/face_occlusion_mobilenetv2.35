@@ -83,6 +83,10 @@ training:
   logit_penalty:
     enabled: true
     max_logit: 3.8918203
+    # Bound the model's returned scalar logit with tanh.  Sigmoid remains
+    # outside the model (loss/evaluation/inference), so probabilities stay
+    # strictly inside approximately [0.02, 0.98].
+    bounded_output: true
     margin_weight: 0.05
     l2_weight: 0.0
 
@@ -108,6 +112,8 @@ inference:
 runtime:
   train_device: auto
   evaluation_device: cpu
+  # Device used while tracing/exporting the ONNX graph. "auto" prefers CUDA.
+  export_device: auto
 
 evaluation:
   # Replaced after every training run with metrics/images from best.pth.
@@ -139,7 +145,7 @@ paths:
   best_checkpoint_name: best.pth
   history_name: history.csv
   auto_export_after_training: false
-  onnx_path: outputs/onnx/face_4class_single_logit.onnx
+  onnx_path: outputs/onnx/face_4class_single_logit_cuda.onnx
   onnx_opset: 17
   onnx_dynamic_batch: true
   onnx_input_name: images
